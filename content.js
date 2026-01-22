@@ -59,7 +59,7 @@
             style.textContent = `
                 :host {
                     all: initial;
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                    font-family: "Inter", sans-serif;
                 }
                 .qs-overlay {
                     position: fixed;
@@ -100,7 +100,7 @@
                     padding: 2px 8px;
                     border-radius: 12px;
                     background: #e3f2fd;
-                    color: #0277bd;
+                    color: #0d6da0;
                     font-weight: 600;
                     text-transform: uppercase;
                     letter-spacing: 0.5px;
@@ -154,7 +154,7 @@
                     width: 24px;
                     height: 24px;
                     border: 3px solid #e0e0e0;
-                    border-top-color: #0070f3;
+                    border-top-color: #0d6da0;
                     border-radius: 50%;
                     animation: spin 1s linear infinite;
                 }
