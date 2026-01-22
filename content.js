@@ -57,6 +57,7 @@
         injectStyles() {
             const style = document.createElement("style");
             style.textContent = `
+                @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
                 :host {
                     all: initial;
                     font-family: "Inter", sans-serif;
@@ -80,17 +81,18 @@
                     box-shadow: 0 4px 6px rgba(0,0,0,0.05);
                 }
                 .qs-header {
-                    background-color: #ffffff;
-                    padding: 16px 20px;
+                    background-color: #0d6da0;
+                    padding: 15px;
                     display: flex;
                     justify-content: space-between;
                     align-items: center;
-                    border-bottom: 1px solid #f0f0f0;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    color: white;
                 }
                 .qs-title {
-                    font-weight: 700;
+                    font-weight: 600;
                     font-size: 16px;
-                    color: #1a1a1a;
+                    color: white;
                     display: flex;
                     align-items: center;
                     gap: 8px;
@@ -99,16 +101,16 @@
                     font-size: 11px;
                     padding: 2px 8px;
                     border-radius: 12px;
-                    background: #e3f2fd;
+                    background: white;
                     color: #0d6da0;
                     font-weight: 600;
                     text-transform: uppercase;
                     letter-spacing: 0.5px;
                 }
                 .qs-close-btn {
-                    background: #f5f5f5;
+                    background: rgba(255, 255, 255, 0.2);
                     border: none;
-                    color: #666;
+                    color: white;
                     cursor: pointer;
                     width: 28px;
                     height: 28px;
@@ -120,8 +122,8 @@
                     transition: all 0.2s;
                 }
                 .qs-close-btn:hover {
-                    background: #e0e0e0;
-                    color: #333;
+                    background: rgba(255, 255, 255, 0.3);
+                    color: white;
                 }
                 .qs-body {
                     background: #fafafa;

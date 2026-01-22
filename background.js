@@ -115,9 +115,18 @@ async function handlePackID(packID, baseUrl, tabId) {
         const pngBlob = await labelaryResp.blob();
         const b64png = await blobToBase64(pngBlob);
 
+        // Extract hostname for history
+        let website = "";
+        try {
+            website = new URL(baseUrl).hostname;
+        } catch (e) {
+            website = baseUrl;
+        }
+
         // Save to History
         await saveToHistory({
             packID: packID,
+            website: website,
             timestamp: Date.now(),
             png: b64png
         });

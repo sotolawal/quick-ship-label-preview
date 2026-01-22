@@ -20,7 +20,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             el.innerHTML = `
                 <div class="item-info">
-                    <span class="pack-id">Pack ID: ${item.packID}</span>
+                    <div class="header-row">
+                        <span class="pack-id">Pack ID: ${item.packID}</span>
+                        ${item.website ? `<span class="website">${item.website}</span>` : ''}
+                    </div>
                     <span class="timestamp">${dateStr} at ${timeStr}</span>
                 </div>
                 <div style="color: #0056b3; font-size: 20px;">&rsaquo;</div>
