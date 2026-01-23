@@ -12,7 +12,7 @@
     }
 })();
 
-console.log("Made it past initial func");
+// console.log("Made it past initial func");
 
 function patchFetch() {
     //console.log("Patching fetch...");
