@@ -1,5 +1,5 @@
 (function () {
-    // --- Orphaned Script Detection ---
+    // Orphaned Script Detection
     // If the extension context is invalid (e.g., after extension reload), stop execution.
     try {
         if (!chrome.runtime || !chrome.runtime.id) {
@@ -13,7 +13,7 @@
     if (window.QuickShipLabelPreviewActive) return;
     window.QuickShipLabelPreviewActive = true;
 
-    // --- Inject the Interceptor Script ---
+    // Inject the Interceptor Script
     function injectInterceptor() {
         try {
             if (!chrome.runtime?.id) return; // Double check before access
@@ -24,7 +24,7 @@
         } catch (err) {
             // Suppress context invalidation errors here
             if (!err.message.includes("Extension context invalidated")) {
-                console.error("[QuickShip] Injection error:", err);
+                console.error("[Quick Ship] Injection error:", err);
             }
         }
     }
@@ -35,7 +35,7 @@
         window.addEventListener("DOMContentLoaded", injectInterceptor);
     }
 
-    // --- UI Manager Class ---
+    // Class for UI Rendering
     class LabelPreviewUI {
         constructor() {
             this.hostId = "quick-ship-preview-host";
@@ -264,43 +264,45 @@
 
     const ui = new LabelPreviewUI();
 
-    // --- Event Listeners ---
+    // Event Listeners
 
-    // 1. Listen for PackID detection from Injected Script
+    // Listen for PackID detection from Injected Script
     window.addEventListener("label_packid_found", (e) => {
         const { packID, baseUrl } = e.detail;
-        console.log("[QuickShip] PackID detected:", packID, "on base URL:", baseUrl);
+        console.log("[Quick Ship] PackID detected:", packID, "on base URL:", baseUrl);
 
         // Show loading state immediately
         ui.showLoading();
 
         // Inform background script to start fetching
         try {
+            console.log("[Quick Ship] Sending message to background script", packID, baseUrl);
             chrome.runtime.sendMessage({
                 type: "packID",
                 packID: packID,
                 baseUrl: baseUrl
             });
+            console.log("[Quick Ship] Message sent to background script");
         } catch (err) {
-            console.error("[QuickShip] Message failed:", err);
+            console.error("[Quick Ship] Message failed:", err);
             ui.showError("Connection lost. Please refresh the page.");
         }
     });
 
-    // 2. Listen for responses from Background Script
+    // Listen for responses from Background Script
     try {
         chrome.runtime.onMessage.addListener((msg) => {
             if (msg.type === "labelPreview") {
                 if (msg.success) {
                     ui.showImage(msg.png);
                 } else {
-                    console.error("[QuickShip] Label Generation Error:", msg.error);
+                    console.error("[Quick Ship] Label Generation Error:", msg.error);
                     ui.showError(msg.error || "Failed to generate label.");
                 }
             }
         });
     } catch (err) {
-        console.warn("[QuickShip] Could not attach listener (context invalidated).");
+        console.warn("[Quick Ship] Could not attach listener (context invalidated).");
     }
 
 })();

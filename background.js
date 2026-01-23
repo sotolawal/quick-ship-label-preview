@@ -18,9 +18,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     }
 });
 
+//Check if PackID message is sucessfully received
 chrome.runtime.onMessage.addListener(async (msg, sender) => {
     if (msg.type === "packID") {
-        console.log("BACKGROUND RECEIVED MESSAGE:", msg);
         await handlePackID(msg.packID, msg.baseUrl, sender.tab.id);
     }
 });
@@ -35,25 +35,77 @@ async function handlePackID(packID, baseUrl, tabId) {
     };
 
     try {
-        // Construct URL using the dynamic base URL provided by the content script
-        // Ensure no trailing slash on baseUrl to match the path structure
+        // Cleanly construct URL using the dynamic base URL provided by the content script
         const cleanBase = baseUrl.replace(/\/$/, ""); 
-        const xmlUrl = `${cleanBase}/CarrierXmlFile/UPS_APIShipReply__${packID}.xml`;
-        console.log("Fetching XML:", xmlUrl);
+        let targetUrl = null;
 
-        // Retry logic for XML fetch (up to 30 attempts * 2s = 60s max wait)
+        // Strategy 1: Attempt to resolve exact URL via API
+        try {
+            console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
+            const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`);
+            if (listResponse.ok) {
+                const files = await listResponse.json();
+                // Look for a file that contains the packID in its name
+                // Guard against files being null/undefined or not an array
+                if (Array.isArray(files)) {
+                    const match = files.find(f => f.fileName && f.fileName.includes(packID));
+                    if (match) {
+                        // Normalize backslashes to slashes and ensure proper joining
+                        const safeName = match.fileName.replace(/\\/g, "/");
+                        const sep = safeName.startsWith("/") ? "" : "/";
+                        targetUrl = `${cleanBase}${sep}${safeName}`;
+                        console.log(`Resolved XML URL via API: ${targetUrl}`);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("API resolution failed, falling back to pattern matching:", e);
+        }
+
+        // Strategy 2: Use expected URLs as a fallback
+        const urlDouble = `${cleanBase}/CarrierXmlFile/UPS_APIShipReply__${packID}.xml`;
+        const urlSingle = `${cleanBase}/CarrierXmlFile/UPS_APIShipReply_${packID}.xml`;
+        
+        // Good error handling, commenting out but saving for later
+        //if (!targetUrl) {
+        //    console.log(`API resolution skipped/failed. Will attempt pattern match: ${urlDouble} OR ${urlSingle}`);
+        //}
+
+        // Retry logic for XML fetch (up to 1 minute)
         let xmlResponse;
         let attempts = 0;
         const maxAttempts = 30;
 
         while (attempts < maxAttempts) {
-            try {
-                xmlResponse = await fetch(xmlUrl);
-                if (xmlResponse.ok) break; // Success!
-                // If it's not a 404 (missing file), it might be a real error, but we'll retry anyway
-                // just in case it's a transient server issue.
-            } catch (e) {
-                // Network error, ignore and retry
+            if (targetUrl) {
+                // Strategy 1: Fetch resolved URL
+                try {
+                    const resp = await fetch(targetUrl);
+                    if (resp.ok) {
+                        xmlResponse = resp;
+                        break;
+                    }
+                } catch (e) { /* ignore */ }
+            } else {
+                // Strategy 2: Guess patterns
+                try {
+                    const resp1 = await fetch(urlDouble);
+                    if (resp1.ok) {
+                        xmlResponse = resp1;
+                        console.log(`Found XML at: ${urlDouble}`);
+                        break; 
+                    }
+                } catch (e) { /* ignore */ }
+
+                // If not found, try single underscore
+                try {
+                    const resp2 = await fetch(urlSingle);
+                    if (resp2.ok) {
+                        xmlResponse = resp2;
+                        console.log(`Found XML at: ${urlSingle}`);
+                        break; 
+                    }
+                } catch (e) { /* ignore */ }
             }
             
             attempts++;
@@ -64,7 +116,7 @@ async function handlePackID(packID, baseUrl, tabId) {
         }
 
         if (!xmlResponse || !xmlResponse.ok) {
-            throw new Error(`Failed to fetch XML after ${maxAttempts} attempts (Status: ${xmlResponse ? xmlResponse.status : 'Network Error'}). Is GenerateXMLFiles set to true?`);
+            throw new Error(`Failed to fetch XML with status code ${xmlResponse ? xmlResponse.status : 'Network Error'}). \r\n Is GenerateXMLFiles set to true?`);
         }
 
         const xml = await xmlResponse.text();
@@ -92,7 +144,8 @@ async function handlePackID(packID, baseUrl, tabId) {
             throw new Error("Decoded ZPL data is empty.");
         }
 
-        console.log(`Sending ZPL to Labelary (${zpl.length} bytes)...`);
+        // Good error handling, commented out to reduce console noise
+        // console.log(`Sending ZPL to Labelary (${zpl.length} bytes)...`);
         
         // Use the correct endpoint with index /0
         // Use application/x-www-form-urlencoded as per docs for raw body
