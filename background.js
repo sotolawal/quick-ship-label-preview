@@ -21,11 +21,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 //Check if PackID message is sucessfully received
 chrome.runtime.onMessage.addListener(async (msg, sender) => {
     if (msg.type === "packID") {
-        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id);
+        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders);
+        console.log("[Quick Ship] PackID message processed:", msg.packID);
     }
 });
 
-async function handlePackID(packID, baseUrl, tabId) {
+async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     const sendError = (errMsg) => {
         chrome.tabs.sendMessage(tabId, {
             type: "labelPreview",
@@ -42,19 +43,44 @@ async function handlePackID(packID, baseUrl, tabId) {
         // Strategy 1: Attempt to resolve exact URL via API
         try {
             console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
-            const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`);
+            const fetchOptions = { headers: authHeaders || {} };
+            const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`, fetchOptions);
             if (listResponse.ok) {
-                const files = await listResponse.json();
-                // Look for a file that contains the packID in its name
-                // Guard against files being null/undefined or not an array
+                const responseData = await listResponse.json();
+                
+                // Handle nested result array: { result: [...] }
+                const files = (responseData && Array.isArray(responseData.result)) ? responseData.result : responseData;
+
                 if (Array.isArray(files)) {
-                    const match = files.find(f => f.fileName && f.fileName.includes(packID));
-                    if (match) {
-                        // Normalize backslashes to slashes and ensure proper joining
-                        const safeName = match.fileName.replace(/\\/g, "/");
-                        const sep = safeName.startsWith("/") ? "" : "/";
-                        targetUrl = `${cleanBase}${sep}${safeName}`;
-                        console.log(`Resolved XML URL via API: ${targetUrl}`);
+                    // Filter for files containing the packID
+                    const matches = files.filter(f => f.fileName && f.fileName.includes(packID));
+                    
+                    if (matches.length > 0) {
+                        // Prioritize file containing "Reply" if multiple matches exist
+                        let match = matches.find(f => f.fileName.toLowerCase().includes("reply"));
+                        
+                        // Fallback to the first match if no "Reply" file is found
+                        if (!match) {
+                            match = matches[0];
+                        }
+
+                        if (match) {
+                            // Normalize backslashes to slashes and ensure proper joining
+                            // Typically match.fileName is just the filename (e.g. "UPS_Reply_123.xml")
+                            // But if it contains a path, we strip it to be safe or handle it.
+                            // Assuming match.fileName is just the filename or partial path.
+                            
+                            let safeName = match.fileName.replace(/\\/g, "/");
+                            
+                            // If the API returns a full path starting with CarrierXmlFile, respect it, otherwise prepend it.
+                            if (!safeName.toLowerCase().includes("carrierxmlfile")) {
+                                safeName = `CarrierXmlFile/${safeName}`;
+                            }
+                            
+                            const sep = safeName.startsWith("/") ? "" : "/";
+                            targetUrl = `${cleanBase}${sep}${safeName}`;
+                            console.log(`Resolved XML URL via API: ${targetUrl}`);
+                        }
                     }
                 }
             }
@@ -122,10 +148,12 @@ async function handlePackID(packID, baseUrl, tabId) {
         const xml = await xmlResponse.text();
 
         // Use helper from utils.js
-        const base64 = extractGraphicImage(xml);
-        if (!base64) {
-            throw new Error("No <GraphicImage> tag found in the XML response.");
+        const extracted = extractLabelData(xml);
+        if (!extracted) {
+            throw new Error("No recognized label image tag found in the XML response.");
         }
+        
+        const { data: base64, format } = extracted;
 
         let zpl = "";
         try {
@@ -147,15 +175,22 @@ async function handlePackID(packID, baseUrl, tabId) {
         // Good error handling, commented out to reduce console noise
         // console.log(`Sending ZPL to Labelary (${zpl.length} bytes)...`);
         
+        // Prepare headers
+        const labelaryHeaders = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "image/png"
+        };
+        
+        // Only apply rotation for UPS
+        if (format === "UPS") {
+            labelaryHeaders["X-Rotation"] = "180";
+        }
+
         // Use the correct endpoint with index /0
         // Use application/x-www-form-urlencoded as per docs for raw body
         const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
             method: "POST",
-            headers: { 
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "image/png",
-                "X-Rotation": "180"
-            },
+            headers: labelaryHeaders,
             body: zpl
         });
 

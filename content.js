@@ -268,7 +268,7 @@
 
     // Listen for PackID detection from Injected Script
     window.addEventListener("label_packid_found", (e) => {
-        const { packID, baseUrl } = e.detail;
+        const { packID, baseUrl, authHeaders } = e.detail;
         console.log("[Quick Ship] PackID detected:", packID, "on base URL:", baseUrl);
 
         // Show loading state immediately
@@ -280,7 +280,8 @@
             chrome.runtime.sendMessage({
                 type: "packID",
                 packID: packID,
-                baseUrl: baseUrl
+                baseUrl: baseUrl,
+                authHeaders: authHeaders
             });
             console.log("[Quick Ship] Message sent to background script");
         } catch (err) {

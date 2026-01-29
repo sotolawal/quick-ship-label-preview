@@ -52,6 +52,13 @@ function patchXHR() {
     // console.log("Original XHR open stored-->", origOpen);
     const origSend = XMLHttpRequest.prototype.send;
     // console.log("Original XHR send stored-->", origSend);
+    const origSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+    XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+        if (!this._headers) this._headers = {};
+        this._headers[header] = value;
+        return origSetRequestHeader.apply(this, arguments);
+    };
 
     XMLHttpRequest.prototype.open = function(method, url) {
         this._url = url; // Store URL for debugging if needed
@@ -91,10 +98,10 @@ function patchXHR() {
                 try {
                     // Process text or JSON responses
                     if (this.responseType === '' || this.responseType === 'text') {
-                        safeProcessText(this.responseText, this._url);
+                        safeProcessText(this.responseText, this._url, this._headers);
                     } else if (this.responseType === 'json' && this.response) {
                         try {
-                            safeProcessText(JSON.stringify(this.response), this._url);
+                            safeProcessText(JSON.stringify(this.response), this._url, this._headers);
                         } catch (e) { /* ignore */ }
                     }
                 } catch (err) {
@@ -113,7 +120,7 @@ function patchXHR() {
 }
 // console.log("Made it past XHR patch");
 
-function safeProcessText(txt, url) {
+function safeProcessText(txt, url, headers) {
     if (!txt || !url) {
         // console.log("[Quick Ship] Missing text or URL for processing");
         return;
@@ -181,10 +188,19 @@ function safeProcessText(txt, url) {
                 appBase += path.substring(0, splitIndex);
             }
 
+            const authHeaders = {};
+            if (headers) {
+                Object.keys(headers).forEach(k => {
+                    if (k.toLowerCase() === 'authorization') authHeaders['Authorization'] = headers[k];
+                    if (k.toLowerCase() === 'registrationcode') authHeaders['Registrationcode'] = headers[k];
+                });
+            }
+
             window.dispatchEvent(new CustomEvent("label_packid_found", {
                 detail: { 
                     packID,
-                    baseUrl: appBase
+                    baseUrl: appBase,
+                    authHeaders
                 }
             }));
         } else {
