@@ -13,8 +13,9 @@ function extractLabelData(xml) {
         { pattern: /<bolBase64>([\s\S]+?)<\/bolBase64>/,       format: "TForce" },
         
         // Common tags (checked last)
-        { pattern: /<Image>([\s\S]+?)<\/Image>/,               format: "FedExEndicia" },
-        { pattern: /<label>([\s\S]+?)<\/label>/,               format: "GenericLabel" }
+        { pattern: /<Image>([\s\S]+?)<\/Image>/,                                     format: "FedExEndicia" },
+        { pattern: /<label>([\s\S]+?)<\/label>/,                                     format: "GenericLabel" },
+        { pattern: /<Base64LabelImage(?: [^>]*)?>([\s\S]+?)<\/Base64LabelImage>/,    format: "Endicia" }
     ];
 
     for (const { pattern, format } of strategies) {
