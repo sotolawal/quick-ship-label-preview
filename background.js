@@ -57,7 +57,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                     
                     if (matches.length > 0) {
                         // Prioritize file containing "Reply" if multiple matches exist
-                        let match = matches.find(f => f.fileName.toLowerCase().includes("reply"));
+                        let match = matches.find(f => f.fileName.toLowerCase().includes("reply") || f.fileName.toLowerCase().includes("response"));
                         
                         // Fallback to the first match if no "Reply" file is found
                         if (!match) {
