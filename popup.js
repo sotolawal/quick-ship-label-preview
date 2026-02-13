@@ -139,14 +139,31 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // --- Highlighting Helper ---
     function highlightText(text, query) {
-        if (!query || !text) return text;
+        const fragment = document.createDocumentFragment();
+        const strText = String(text || "");
         
-        const strText = String(text);
+        if (!query || !text) {
+            fragment.textContent = strText;
+            return fragment;
+        }
+        
         // Escape special regex chars in query
-        const safeQuery = query.replace(/[.*+?^${}()|[\\]/g, '\\$&');
+        const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`(${safeQuery})`, 'gi');
         
-        return strText.replace(regex, '<mark>$1</mark>');
+        const parts = strText.split(regex);
+        
+        parts.forEach(part => {
+            if (part.toLowerCase() === query.toLowerCase()) {
+                const mark = document.createElement("mark");
+                mark.textContent = part;
+                fragment.appendChild(mark);
+            } else if (part.length > 0) {
+                fragment.appendChild(document.createTextNode(part));
+            }
+        });
+        
+        return fragment;
     }
 
     // --- Render Function ---
@@ -166,25 +183,50 @@ document.addEventListener("DOMContentLoaded", async () => {
             const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const dateStr = date.toLocaleDateString();
 
-            // Apply highlighting
-            const displayPackID = highlightText(item.packID, highlightQuery);
-            const displayWebsite = highlightText(item.website, highlightQuery);
-
-            el.innerHTML = `
-                <div class="item-info">
-                    <div class="header-row">
-                        <span class="pack-id" title="${item.packID}">${displayPackID}</span>
-                        ${item.website ? `<span class="website">${displayWebsite}</span>` : ''}
-                    </div>
-                    <span class="timestamp">${dateStr} at ${timeStr}</span>
-                </div>
-                <div class="item-actions">
-                    <div class="chevron">&rsaquo;</div>
-                    <button class="delete-btn" title="Delete">
-                        <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                    </button>
-                </div>
-            `;
+            // Structure creation
+            const infoDiv = document.createElement("div");
+            infoDiv.className = "item-info";
+            
+            const headerRow = document.createElement("div");
+            headerRow.className = "header-row";
+            
+            const packIdSpan = document.createElement("span");
+            packIdSpan.className = "pack-id";
+            packIdSpan.title = item.packID || "";
+            packIdSpan.appendChild(highlightText(item.packID, highlightQuery));
+            headerRow.appendChild(packIdSpan);
+            
+            if (item.website) {
+                const websiteSpan = document.createElement("span");
+                websiteSpan.className = "website";
+                websiteSpan.appendChild(highlightText(item.website, highlightQuery));
+                headerRow.appendChild(websiteSpan);
+            }
+            
+            const timestampSpan = document.createElement("span");
+            timestampSpan.className = "timestamp";
+            timestampSpan.textContent = `${dateStr} at ${timeStr}`;
+            
+            infoDiv.appendChild(headerRow);
+            infoDiv.appendChild(timestampSpan);
+            
+            const actionsDiv = document.createElement("div");
+            actionsDiv.className = "item-actions";
+            
+            const chevron = document.createElement("div");
+            chevron.className = "chevron";
+            chevron.textContent = "\u203A"; // &rsaquo;
+            
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "delete-btn";
+            deleteBtn.title = "Delete";
+            deleteBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
+            
+            actionsDiv.appendChild(chevron);
+            actionsDiv.appendChild(deleteBtn);
+            
+            el.appendChild(infoDiv);
+            el.appendChild(actionsDiv);
 
             // Open Image
             el.addEventListener("click", (e) => {
@@ -193,7 +235,6 @@ document.addEventListener("DOMContentLoaded", async () => {
             });
 
             // Delete Individual Item
-            const deleteBtn = el.querySelector(".delete-btn");
             deleteBtn.addEventListener("click", async (e) => {
                 e.stopPropagation();
                 
@@ -219,7 +260,11 @@ document.addEventListener("DOMContentLoaded", async () => {
             .then(res => res.blob())
             .then(blob => {
                 const url = URL.createObjectURL(blob);
-                chrome.tabs.create({ url: url });
+                chrome.tabs.create({ url: url }, () => {
+                    // Revoke the object URL after a delay to allow the tab to load it.
+                    // If the popup closes before this, the browser handles cleanup.
+                    setTimeout(() => URL.revokeObjectURL(url), 10000);
+                });
             });
     }
 

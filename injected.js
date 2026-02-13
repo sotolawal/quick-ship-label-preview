@@ -1,6 +1,6 @@
 (function() {
-    // Flag to prevent double patching if the script is injected multiple times
-    if (window.QuickShipInterceptorActive) return;
+    // We no longer return early if Active is set, to allow re-patching with new logic.
+    // However, we rely on stored original functions to avoid stacking.
     window.QuickShipInterceptorActive = true;
 
     try {
@@ -16,7 +16,13 @@
 
 function patchFetch() {
     //console.log("Patching fetch...");
-    const origFetch = window.fetch;
+    
+    // Store original fetch ONCE to prevent stacking
+    if (!window.__qsOrigFetch) {
+        window.__qsOrigFetch = window.fetch;
+    }
+    const origFetch = window.__qsOrigFetch;
+
     //console.log("Original fetch stored-->", origFetch);
     window.fetch = async function(...args) {
         // console.log("Fetch called with args:", args);
@@ -48,19 +54,27 @@ function patchFetch() {
 
 function patchXHR() {
     // console.log("Patching XHR...");
-    const origOpen = XMLHttpRequest.prototype.open;
-    // console.log("Original XHR open stored-->", origOpen);
-    const origSend = XMLHttpRequest.prototype.send;
-    // console.log("Original XHR send stored-->", origSend);
-    const origSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+    const XHR = XMLHttpRequest.prototype;
 
-    XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+    // Store originals ONCE
+    if (!XHR.__qsOrigOpen) XHR.__qsOrigOpen = XHR.open;
+    if (!XHR.__qsOrigSend) XHR.__qsOrigSend = XHR.send;
+    if (!XHR.__qsOrigSetHeader) XHR.__qsOrigSetHeader = XHR.setRequestHeader;
+
+    const origOpen = XHR.__qsOrigOpen;
+    const origSend = XHR.__qsOrigSend;
+    const origSetRequestHeader = XHR.__qsOrigSetHeader;
+
+    // console.log("Original XHR open stored-->", origOpen);
+    // console.log("Original XHR send stored-->", origSend);
+
+    XHR.setRequestHeader = function(header, value) {
         if (!this._headers) this._headers = {};
         this._headers[header] = value;
         return origSetRequestHeader.apply(this, arguments);
     };
 
-    XMLHttpRequest.prototype.open = function(method, url) {
+    XHR.open = function(method, url) {
         this._url = url; // Store URL for debugging if needed
         this._method = method;
         // console.log("XHR open called with URL:", url);
@@ -69,7 +83,7 @@ function patchXHR() {
         return result;
     };
 
-    XMLHttpRequest.prototype.send = function(...args) {
+    XHR.send = function(...args) {
         // Use readystatechange for more reliable status/response capture
         this.addEventListener("readystatechange", () => {
             // Log every state change for debugging

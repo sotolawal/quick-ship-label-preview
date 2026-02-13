@@ -26,8 +26,22 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
     }
 });
 
+const activeRequests = new Map();
+
 async function handlePackID(packID, baseUrl, tabId, authHeaders) {
+    // Cancel any existing request for this tab
+    if (activeRequests.has(tabId)) {
+        console.log(`[Quick Ship] Aborting previous request for tab ${tabId}`);
+        activeRequests.get(tabId).abort();
+    }
+
+    const controller = new AbortController();
+    activeRequests.set(tabId, controller);
+    const signal = controller.signal;
+
     const sendError = (errMsg) => {
+        // Only send error if not aborted
+        if (signal.aborted) return;
         chrome.tabs.sendMessage(tabId, {
             type: "labelPreview",
             success: false,
@@ -43,7 +57,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         // Strategy 1: Attempt to resolve exact URL via API
         try {
             console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
-            const fetchOptions = { headers: authHeaders || {} };
+            const fetchOptions = { headers: authHeaders || {}, signal };
             const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`, fetchOptions);
             if (listResponse.ok) {
                 const responseData = await listResponse.json();
@@ -85,6 +99,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                 }
             }
         } catch (e) {
+            if (signal.aborted) throw e;
             console.warn("API resolution failed, falling back to pattern matching:", e);
         }
 
@@ -103,41 +118,54 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         const maxAttempts = 30;
 
         while (attempts < maxAttempts) {
+            if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+
             if (targetUrl) {
                 // Strategy 1: Fetch resolved URL
                 try {
-                    const resp = await fetch(targetUrl);
+                    const resp = await fetch(targetUrl, { signal });
                     if (resp.ok) {
                         xmlResponse = resp;
                         break;
                     }
-                } catch (e) { /* ignore */ }
+                } catch (e) { if (signal.aborted) throw e; }
             } else {
                 // Strategy 2: Guess patterns
                 try {
-                    const resp1 = await fetch(urlDouble);
+                    const resp1 = await fetch(urlDouble, { signal });
                     if (resp1.ok) {
                         xmlResponse = resp1;
                         console.log(`Found XML at: ${urlDouble}`);
                         break; 
                     }
-                } catch (e) { /* ignore */ }
+                } catch (e) { if (signal.aborted) throw e; }
 
                 // If not found, try single underscore
                 try {
-                    const resp2 = await fetch(urlSingle);
+                    const resp2 = await fetch(urlSingle, { signal });
                     if (resp2.ok) {
                         xmlResponse = resp2;
                         console.log(`Found XML at: ${urlSingle}`);
                         break; 
                     }
-                } catch (e) { /* ignore */ }
+                } catch (e) { if (signal.aborted) throw e; }
             }
             
             attempts++;
             if (attempts < maxAttempts) {
-                // Silent wait
-                await new Promise(r => setTimeout(r, 2000));
+                // Silent wait, abortable
+                await new Promise((resolve, reject) => {
+                    const timer = setTimeout(() => {
+                        signal.removeEventListener('abort', onAbort);
+                        resolve();
+                    }, 2000);
+                    const onAbort = () => {
+                        clearTimeout(timer);
+                        signal.removeEventListener('abort', onAbort);
+                        reject(new DOMException("Aborted", "AbortError"));
+                    };
+                    signal.addEventListener('abort', onAbort);
+                });
             }
         }
 
@@ -191,7 +219,8 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
             method: "POST",
             headers: labelaryHeaders,
-            body: zpl
+            body: zpl,
+            signal
         });
 
         if (!labelaryResp.ok) {
@@ -219,15 +248,26 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             png: b64png
         });
 
-        chrome.tabs.sendMessage(tabId, {
-            type: "labelPreview",
-            success: true,
-            png: b64png
-        });
+        if (!signal.aborted) {
+            chrome.tabs.sendMessage(tabId, {
+                type: "labelPreview",
+                success: true,
+                png: b64png
+            });
+        }
 
     } catch (err) {
-        console.error("Background processing error:", err);
-        sendError(err.message || "Unknown error occurred during processing.");
+        if (signal.aborted || err.name === 'AbortError') {
+            console.log(`[Quick Ship] Request aborted for packID: ${packID}`);
+        } else {
+            console.error("Background processing error:", err);
+            sendError(err.message || "Unknown error occurred during processing.");
+        }
+    } finally {
+        // Cleanup: remove from activeRequests if it's still this controller
+        if (activeRequests.get(tabId) === controller) {
+            activeRequests.delete(tabId);
+        }
     }
 }
 
