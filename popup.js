@@ -102,15 +102,39 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     // Delete All History
-    deleteAllBtn.addEventListener("click", async () => {
-        if (fullHistory.length === 0) return;
+    const modal = document.getElementById("confirmation-modal");
+    const modalCancelBtn = document.getElementById("modal-cancel-btn");
+    const modalConfirmBtn = document.getElementById("modal-confirm-btn");
 
-        if (confirm("Are you sure you want to delete all history?")) {
-            fullHistory = [];
-            await chrome.storage.local.set({ labelHistory: [] });
-            renderHistory([]);
-            closeSearch();
+    function closeModal() {
+        modal.classList.remove("active");
+    }
+
+    modalCancelBtn.addEventListener("click", closeModal);
+
+    // Close modal when clicking outside
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) closeModal();
+    });
+    
+    // Close on Escape key
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && modal.classList.contains("active")) {
+            closeModal();
         }
+    });
+
+    deleteAllBtn.addEventListener("click", () => {
+        if (fullHistory.length === 0) return;
+        modal.classList.add("active");
+    });
+
+    modalConfirmBtn.addEventListener("click", async () => {
+        fullHistory = [];
+        await chrome.storage.local.set({ labelHistory: [] });
+        renderHistory([]);
+        closeSearch();
+        closeModal();
     });
 
     // --- Highlighting Helper ---
