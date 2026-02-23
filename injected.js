@@ -144,26 +144,19 @@ function safeProcessText(txt, url, headers) {
             const json = JSON.parse(txt);
             const res = json.result || json;
             
-            const findToken = (obj) => {
-                if (!obj || typeof obj !== 'object') return null;
-                for (const val of Object.values(obj)) {
-                    if (typeof val === 'string' && val.trim().startsWith('?')) return val;
-                    if (typeof val === 'object') {
-                        const found = findToken(val);
-                        if (found) return found;
-                    }
-                }
-                return null;
-            };
-
-            const tokenStr = findToken(res);
-            if (tokenStr) window.__qsCloudTokens = tokenStr;
-
-            // Capture Storage Account (4th key in result as described)
             if (res && typeof res === 'object') {
                 const values = Object.values(res);
-                // 0-based index, so index 3 is the 4th item
-                if (values.length > 3) window.__qsStorageAccount = values[3];
+                
+                // Index 2: Storage Connection String (SAS Token)
+                if (values.length > 2 && typeof values[2] === 'string') {
+                    const val = values[2].trim();
+                    if (val.startsWith('?')) window.__qsCloudTokens = val;
+                }
+
+                // Index 3: Storage Account Name
+                if (values.length > 3) {
+                    window.__qsStorageAccount = values[3];
+                }
             }
         } catch (e) { /* ignore */ }
         return;
