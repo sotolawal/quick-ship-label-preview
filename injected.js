@@ -138,33 +138,6 @@ function safeProcessText(txt, url, headers) {
         return;
     };
 
-    // Capture Cloud Tokens from ClientConfiguration
-    if (url.match(/GetClientConfiguration/i)) {
-        console.log("Attempting to extract cloud tokens from ClientConfiguration response...");
-        try {
-            const json = JSON.parse(txt);
-            const res = json.result || json;
-            
-            if (res && typeof res === 'object') {
-                const values = Object.values(res);
-                
-                // Index 2: Storage Connection String (SAS Token)
-                if (values.length > 2 && typeof values[2] === 'string') {
-                    const val = values[2].trim();
-                    if (val.startsWith('?')) window.__qsCloudTokens = val;
-                    console.log("[Quick Ship] Cloud tokens extracted:", !!window.__qsCloudTokens);
-                }
-
-                // Index 3: Storage Account Name
-                if (values.length > 3) {
-                    window.__qsStorageAccount = values[3];
-                    console.log("[Quick Ship] Storage account extracted:", !!window.__qsStorageAccount);
-                }
-            }
-        } catch (e) { console.log("[Quick Ship] Error extracting cloud tokens:", e); }
-        return;
-    }
-
     // Filter by endpoint: Ensure the URL contains "ShipShipment" (case-insensitive)
     if (!url.match(/ShipShipment/i)) {
         // console.log("[Quick Ship] URL does not match ShipShipment pattern");
@@ -240,9 +213,7 @@ function safeProcessText(txt, url, headers) {
                 detail: { 
                     packID,
                     baseUrl: appBase,
-                    authHeaders,
-                    cloudTokens: window.__qsCloudTokens || "",
-                    storageAccount: window.__qsStorageAccount || ""
+                    authHeaders
                 }
             }));
         } else {
