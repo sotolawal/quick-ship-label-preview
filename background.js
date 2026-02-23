@@ -22,7 +22,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener(async (msg, sender) => {
     if (msg.type === "packID") {
         await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders, msg.cloudTokens, msg.storageAccount);
-        console.log("[Quick Ship] PackID message processed:", msg.packID);
+        console.log("[Quick Ship] PackID message processed:", msg.packID, "Storage Account Detected:", !!msg.storageAccount);
     }
 });
 
