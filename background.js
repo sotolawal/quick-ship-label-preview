@@ -172,7 +172,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders, cloudTokens, st
         // Retry logic for XML fetch (up to 1 minute)
         let xmlResponse;
         let attempts = 0;
-        const maxAttempts = 30;
+        const maxAttempts = 3;
 
         while (attempts < maxAttempts) {
             if (signal.aborted) throw new DOMException("Aborted", "AbortError");
