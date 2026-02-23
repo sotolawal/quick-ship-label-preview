@@ -21,14 +21,50 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 //Check if PackID message is sucessfully received
 chrome.runtime.onMessage.addListener(async (msg, sender) => {
     if (msg.type === "packID") {
-        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders);
+        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders, msg.cloudTokens);
         console.log("[Quick Ship] PackID message processed:", msg.packID);
     }
 });
 
 const activeRequests = new Map();
 
-async function handlePackID(packID, baseUrl, tabId, authHeaders) {
+// TODO: Define the strict order of keys required for Cloud.
+// These keys will be extracted from the upstream query string and reordered.
+const CLOUD_REQUIRED_KEYS = [
+    // "ExampleKey1", 
+    // "ExampleKey2",
+    // "ExampleKey3"
+];
+
+function buildCloudQueryString(rawQuery) {
+    if (!rawQuery) return ""; // On-Premise or no tokens found
+
+    if (CLOUD_REQUIRED_KEYS.length === 0) {
+        console.warn("[Quick Ship] Cloud tokens detected but CLOUD_REQUIRED_KEYS is empty. Cloud fetch may fail.");
+        return "";
+    }
+    
+    const sourceParams = new URLSearchParams(rawQuery);
+    const targetParams = new URLSearchParams();
+    
+    CLOUD_REQUIRED_KEYS.forEach(key => {
+        if (sourceParams.has(key)) {
+            targetParams.append(key, sourceParams.get(key));
+        }
+    });
+    
+    return targetParams.toString();
+}
+
+function appendQueryToUrl(urlStr, queryString) {
+    if (!queryString) return urlStr;
+    const url = new URL(urlStr);
+    const params = new URLSearchParams(queryString);
+    params.forEach((val, key) => url.searchParams.append(key, val));
+    return url.toString();
+}
+
+async function handlePackID(packID, baseUrl, tabId, authHeaders, cloudTokens) {
     // Cancel any existing request for this tab
     if (activeRequests.has(tabId)) {
         console.log(`[Quick Ship] Aborting previous request for tab ${tabId}`);
@@ -54,11 +90,15 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         const cleanBase = baseUrl.replace(/\/$/, ""); 
         let targetUrl = null;
 
+        // Generate the reordered query string for Cloud
+        const cloudQuery = buildCloudQueryString(cloudTokens);
+
         // Strategy 1: Attempt to resolve exact URL via API
         try {
             console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
             const fetchOptions = { headers: authHeaders || {}, signal };
-            const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`, fetchOptions);
+            const listApiUrl = appendQueryToUrl(`${cleanBase}/api/downloads/getCarrierXMLs`, cloudQuery);
+            const listResponse = await fetch(listApiUrl, fetchOptions);
             if (listResponse.ok) {
                 const responseData = await listResponse.json();
                 
@@ -92,7 +132,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                             }
                             
                             const sep = safeName.startsWith("/") ? "" : "/";
-                            targetUrl = `${cleanBase}${sep}${safeName}`;
+                            targetUrl = appendQueryToUrl(`${cleanBase}${sep}${safeName}`, cloudQuery);
                             console.log(`Resolved XML URL via API: ${targetUrl}`);
                         }
                     }
@@ -104,8 +144,8 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         }
 
         // Strategy 2: Use expected URLs as a fallback
-        const urlDouble = `${cleanBase}/CarrierXmlFile/UPS_APIShipReply__${packID}.xml`;
-        const urlSingle = `${cleanBase}/CarrierXmlFile/UPS_APIShipReply_${packID}.xml`;
+        const urlDouble = appendQueryToUrl(`${cleanBase}/CarrierXmlFile/UPS_APIShipReply__${packID}.xml`, cloudQuery);
+        const urlSingle = appendQueryToUrl(`${cleanBase}/CarrierXmlFile/UPS_APIShipReply_${packID}.xml`, cloudQuery);
         
         // Good error handling, commenting out but saving for later
         //if (!targetUrl) {

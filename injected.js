@@ -34,14 +34,12 @@ function patchFetch() {
         try {
             // Clone the response to read the body without consuming the original stream     
             // console.log("Attemting to clone response...")    
-        const clone = response.clone();
-            /* console.debug("[Quick Ship] Fetch seen", {
-                requestUrl: url,
-                finalUrl: response.url,
-                status: response.status,
-                redirected: response.redirected,
-                contentType: response.headers.get("content-type")
-            }); */
+            const clone = response.clone();
+            clone.text().then(bodyText => {
+                const headers = {};
+                response.headers.forEach((val, key) => { headers[key] = val; });
+                safeProcessText(bodyText, url, headers);
+            }).catch(() => { /* ignore read errors */ });
         } catch (err) {
             console.warn("[Quick Ship] Fetch intercept warning:", err);
         }
@@ -139,6 +137,22 @@ function safeProcessText(txt, url, headers) {
         // console.log("[Quick Ship] Missing text or URL for processing");
         return;
     };
+
+    // Capture Cloud Tokens from ClientConfiguration
+    if (url.match(/GetClientConfiguration/i)) {
+        try {
+            const json = JSON.parse(txt);
+            const res = json.result || json;
+            // Find the string value that looks like a query string (starts with ?)
+            if (res && typeof res === 'object') {
+                const values = Object.values(res);
+                const tokenStr = values.find(v => typeof v === 'string' && v.trim().startsWith('?'));
+                if (tokenStr) window.__qsCloudTokens = tokenStr;
+            }
+        } catch (e) { /* ignore */ }
+        return;
+    }
+
     // Filter by endpoint: Ensure the URL contains "ShipShipment" (case-insensitive)
     if (!url.match(/ShipShipment/i)) {
         // console.log("[Quick Ship] URL does not match ShipShipment pattern");
@@ -214,7 +228,8 @@ function safeProcessText(txt, url, headers) {
                 detail: { 
                     packID,
                     baseUrl: appBase,
-                    authHeaders
+                    authHeaders,
+                    cloudTokens: window.__qsCloudTokens || ""
                 }
             }));
         } else {
