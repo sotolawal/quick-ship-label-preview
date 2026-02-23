@@ -28,12 +28,8 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
 
 const activeRequests = new Map();
 
-// TODO: Define the strict order of keys required for Cloud.
-// These keys will be extracted from the upstream query string and reordered.
 const CLOUD_REQUIRED_KEYS = [
-    // "ExampleKey1", 
-    // "ExampleKey2",
-    // "ExampleKey3"
+     "sv", "se", "sr", "sp", "sig"
 ];
 
 function buildCloudQueryString(rawQuery) {
