@@ -25,7 +25,7 @@ function extractLabelData(xml) {
                     // Specific / Nested
                     { selector: "LabelImage Bytes", format: "DHL" },
                     { selector: "Label Image",      format: "TNT" },
-                    { selector: "labels label",     format: "AusPost" },
+                    { selector: "labels label",     format: "AusPost,Canpar" },
                     
                     // Unique Tags
                     { selector: "GraphicImage",     format: "UPS" },
@@ -36,7 +36,8 @@ function extractLabelData(xml) {
                     
                     // Generic (Last resort)
                     { selector: "Image",            format: "FedExEndicia" },
-                    { selector: "label",            format: "GenericLabel" }
+                    { selector: "label",            format: "GenericLabel" },
+                    { selector: "OutputImage",      format: "DHL" },
                 ];
 
                 for (const { selector, format } of domStrategies) {
@@ -64,7 +65,7 @@ function extractLabelData(xml) {
         // Complex/Nested paths
         { pattern: /<LabelImage>[\s\S]*?<Bytes>([\s\S]+?)<\/Bytes>[\s\S]*?<\/LabelImage>/i, format: "DHL" },
         { pattern: /<Label>[\s\S]*?<Image>([\s\S]+?)<\/Image>[\s\S]*?<\/Label>/i,           format: "TNT" },
-        { pattern: /<labels>[\s\S]*?<label>([\s\S]+?)<\/label>[\s\S]*?<\/labels>/i,         format: "AusPost" },
+        { pattern: /<labels>[\s\S]*?<label>([\s\S]+?)<\/label>[\s\S]*?<\/labels>/i,         format: "AusPost, Canpar" },
 
         // Specific unique tags
         { pattern: /<GraphicImage>([\s\S]+?)<\/GraphicImage>/i, format: "UPS" },
@@ -75,7 +76,8 @@ function extractLabelData(xml) {
         
         // Common tags (checked last)
         { pattern: /<Image>([\s\S]+?)<\/Image>/i,                                     format: "FedExEndicia" },
-        { pattern: /<label>([\s\S]+?)<\/label>/i,                                     format: "GenericLabel" }
+        { pattern: /<label>([\s\S]+?)<\/label>/i,                                     format: "GenericLabel" },
+        { pattern: /<OutputImage>([\s\S]+?)<\/OutputImage>/i,                         format: "DHL" }
     ];
 
     for (const { pattern, format } of regexStrategies) {

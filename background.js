@@ -157,7 +157,10 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         }
 
         if (!xmlResponse || !xmlResponse.ok) {
-            throw new Error(`Failed to fetch XML with status code ${xmlResponse ? xmlResponse.status : 'Network Error'}). \r\n Is GenerateXMLFiles set to true?`);
+            if (xmlResponse.status === '') {
+                throw new Error("No data found for this carrier.");
+            }
+            throw new Error(`Failed to preview label with status code ${xmlResponse ? xmlResponse.status : 'Network Error'}).`);
         }
 
         const xml = await xmlResponse.text();
