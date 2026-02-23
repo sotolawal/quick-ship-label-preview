@@ -21,7 +21,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 //Check if PackID message is sucessfully received
 chrome.runtime.onMessage.addListener(async (msg, sender) => {
     if (msg.type === "packID") {
-        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders, msg.cloudTokens);
+        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders, msg.cloudTokens, msg.storageAccount);
         console.log("[Quick Ship] PackID message processed:", msg.packID);
     }
 });
@@ -60,7 +60,7 @@ function appendQueryToUrl(urlStr, queryString) {
     return url.toString();
 }
 
-async function handlePackID(packID, baseUrl, tabId, authHeaders, cloudTokens) {
+async function handlePackID(packID, baseUrl, tabId, authHeaders, cloudTokens, storageAccount) {
     // Cancel any existing request for this tab
     if (activeRequests.has(tabId)) {
         console.log(`[Quick Ship] Aborting previous request for tab ${tabId}`);
@@ -89,59 +89,80 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders, cloudTokens) {
         // Generate the reordered query string for Cloud
         const cloudQuery = buildCloudQueryString(cloudTokens);
 
-        // Strategy 1: Attempt to resolve exact URL via API
-        try {
-            console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
-            const fetchOptions = { headers: authHeaders || {}, signal };
-            const listApiUrl = appendQueryToUrl(`${cleanBase}/api/downloads/getCarrierXMLs`, cloudQuery);
-            const listResponse = await fetch(listApiUrl, fetchOptions);
-            if (listResponse.ok) {
-                const responseData = await listResponse.json();
-                
-                // Handle nested result array: { result: [...] }
-                const files = (responseData && Array.isArray(responseData.result)) ? responseData.result : responseData;
+        // Determine URLs based on Environment (Cloud vs On-Prem)
+        if (storageAccount && cloudQuery) {
+            // --- CLOUD STRATEGY ---
+            console.log("[Quick Ship] Detected Cloud Environment. Constructing Azure Blob URLs...");
+            
+            // Extract Registration Code from headers (case-insensitive check)
+            const regCodeKey = Object.keys(authHeaders).find(k => k.toLowerCase() === 'registrationcode');
+            const regCode = regCodeKey ? authHeaders[regCodeKey] : null;
 
-                if (Array.isArray(files)) {
-                    // Filter for files containing the packID
-                    const matches = files.filter(f => f.fileName && f.fileName.includes(packID));
+            if (!regCode) {
+                throw new Error("Cloud environment detected, but RegistrationCode is missing from headers.");
+            }
+
+            // Construct Base Blob URL: https://{storageAccount}.blob.core.windows.net/demo-artifacts/{registrationCode}_CarrierXML/
+            const blobBase = `https://${storageAccount}.blob.core.windows.net/demo-artifacts/${regCode}_CarrierXML`;
+            
+            // Cloud Fallbacks
+            targetUrl = null; // No API resolution for direct blob storage usually
+            // Note: We append the cloudQuery (SAS token) to the end
+            urlDouble = `${blobBase}/UPS_APIShipReply__${packID}.xml?${cloudQuery}`;
+            urlSingle = `${blobBase}/UPS_APIShipReply_${packID}.xml?${cloudQuery}`;
+
+        } else {
+            // --- ON-PREMISE STRATEGY ---
+            
+            // Strategy 1: Attempt to resolve exact URL via API
+            try {
+                console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
+                const fetchOptions = { headers: authHeaders || {}, signal };
+                const listApiUrl = appendQueryToUrl(`${cleanBase}/api/downloads/getCarrierXMLs`, cloudQuery);
+                const listResponse = await fetch(listApiUrl, fetchOptions);
+                if (listResponse.ok) {
+                    const responseData = await listResponse.json();
                     
-                    if (matches.length > 0) {
-                        // Prioritize file containing "Reply" if multiple matches exist
-                        let match = matches.find(f => f.fileName.toLowerCase().includes("reply") || f.fileName.toLowerCase().includes("response"));
-                        
-                        // Fallback to the first match if no "Reply" file is found
-                        if (!match) {
-                            match = matches[0];
-                        }
+                    // Handle nested result array: { result: [...] }
+                    const files = (responseData && Array.isArray(responseData.result)) ? responseData.result : responseData;
 
-                        if (match) {
-                            // Normalize backslashes to slashes and ensure proper joining
-                            // Typically match.fileName is just the filename (e.g. "UPS_Reply_123.xml")
-                            // But if it contains a path, we strip it to be safe or handle it.
-                            // Assuming match.fileName is just the filename or partial path.
+                    if (Array.isArray(files)) {
+                        // Filter for files containing the packID
+                        const matches = files.filter(f => f.fileName && f.fileName.includes(packID));
+                        
+                        if (matches.length > 0) {
+                            // Prioritize file containing "Reply" if multiple matches exist
+                            let match = matches.find(f => f.fileName.toLowerCase().includes("reply") || f.fileName.toLowerCase().includes("response"));
                             
-                            let safeName = match.fileName.replace(/\\/g, "/");
-                            
-                            // If the API returns a full path starting with CarrierXmlFile, respect it, otherwise prepend it.
-                            if (!safeName.toLowerCase().includes("carrierxmlfile")) {
-                                safeName = `CarrierXmlFile/${safeName}`;
+                            // Fallback to the first match if no "Reply" file is found
+                            if (!match) {
+                                match = matches[0];
                             }
-                            
-                            const sep = safeName.startsWith("/") ? "" : "/";
-                            targetUrl = appendQueryToUrl(`${cleanBase}${sep}${safeName}`, cloudQuery);
-                            console.log(`Resolved XML URL via API: ${targetUrl}`);
+
+                            if (match) {
+                                let safeName = match.fileName.replace(/\\/g, "/");
+                                
+                                // If the API returns a full path starting with CarrierXmlFile, respect it, otherwise prepend it.
+                                if (!safeName.toLowerCase().includes("carrierxmlfile")) {
+                                    safeName = `CarrierXmlFile/${safeName}`;
+                                }
+                                
+                                const sep = safeName.startsWith("/") ? "" : "/";
+                                targetUrl = appendQueryToUrl(`${cleanBase}${sep}${safeName}`, cloudQuery);
+                                console.log(`Resolved XML URL via API: ${targetUrl}`);
+                            }
                         }
                     }
                 }
+            } catch (e) {
+                if (signal.aborted) throw e;
+                console.warn("API resolution failed, falling back to pattern matching:", e);
             }
-        } catch (e) {
-            if (signal.aborted) throw e;
-            console.warn("API resolution failed, falling back to pattern matching:", e);
-        }
 
-        // Strategy 2: Use expected URLs as a fallback
-        const urlDouble = appendQueryToUrl(`${cleanBase}/CarrierXmlFile/UPS_APIShipReply__${packID}.xml`, cloudQuery);
-        const urlSingle = appendQueryToUrl(`${cleanBase}/CarrierXmlFile/UPS_APIShipReply_${packID}.xml`, cloudQuery);
+            // Strategy 2: Use expected URLs as a fallback (On-Prem)
+            urlDouble = appendQueryToUrl(`${cleanBase}/CarrierXmlFile/UPS_APIShipReply__${packID}.xml`, cloudQuery);
+            urlSingle = appendQueryToUrl(`${cleanBase}/CarrierXmlFile/UPS_APIShipReply_${packID}.xml`, cloudQuery);
+        }
         
         // Good error handling, commenting out but saving for later
         //if (!targetUrl) {

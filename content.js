@@ -268,7 +268,7 @@
 
     // Listen for PackID detection from Injected Script
     window.addEventListener("label_packid_found", (e) => {
-        const { packID, baseUrl, authHeaders, cloudTokens } = e.detail;
+        const { packID, baseUrl, authHeaders, cloudTokens, storageAccount } = e.detail;
         console.log("[Quick Ship] PackID detected:", packID, "on base URL:", baseUrl);
 
         // Show loading state immediately
@@ -282,7 +282,8 @@
                 packID: packID,
                 baseUrl: baseUrl,
                 authHeaders: authHeaders,
-                cloudTokens: cloudTokens
+                cloudTokens: cloudTokens,
+                storageAccount: storageAccount
             });
             console.log("[Quick Ship] Message sent to background script");
         } catch (err) {

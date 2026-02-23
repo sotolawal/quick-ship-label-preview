@@ -143,11 +143,27 @@ function safeProcessText(txt, url, headers) {
         try {
             const json = JSON.parse(txt);
             const res = json.result || json;
-            // Find the string value that looks like a query string (starts with ?)
+            
+            const findToken = (obj) => {
+                if (!obj || typeof obj !== 'object') return null;
+                for (const val of Object.values(obj)) {
+                    if (typeof val === 'string' && val.trim().startsWith('?')) return val;
+                    if (typeof val === 'object') {
+                        const found = findToken(val);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+
+            const tokenStr = findToken(res);
+            if (tokenStr) window.__qsCloudTokens = tokenStr;
+
+            // Capture Storage Account (4th key in result as described)
             if (res && typeof res === 'object') {
                 const values = Object.values(res);
-                const tokenStr = values.find(v => typeof v === 'string' && v.trim().startsWith('?'));
-                if (tokenStr) window.__qsCloudTokens = tokenStr;
+                // 0-based index, so index 3 is the 4th item
+                if (values.length > 3) window.__qsStorageAccount = values[3];
             }
         } catch (e) { /* ignore */ }
         return;
@@ -229,7 +245,8 @@ function safeProcessText(txt, url, headers) {
                     packID,
                     baseUrl: appBase,
                     authHeaders,
-                    cloudTokens: window.__qsCloudTokens || ""
+                    cloudTokens: window.__qsCloudTokens || "",
+                    storageAccount: window.__qsStorageAccount || ""
                 }
             }));
         } else {
