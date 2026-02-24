@@ -152,7 +152,7 @@
             flex-direction: column;
             gap: 4px;
             flex: 1;
-            min-width: 0; /* Text truncation fix */
+            min-width: 0; 
         }
 
         .header-row {
@@ -167,8 +167,7 @@
             color: #333;
             font-size: 14px;
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            overflow-x: 100%;
         }
 
         .website {
@@ -176,6 +175,8 @@
             color: #0d6da0;
             font-weight: 500;
             white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .timestamp {

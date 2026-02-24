@@ -66,16 +66,27 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                 const files = (responseData && Array.isArray(responseData.result)) ? responseData.result : responseData;
 
                 if (Array.isArray(files)) {
-                    // Filter for files containing the packID
-                    const matches = files.filter(f => f.fileName && f.fileName.includes(packID));
+                    // Filter for files containing the packID to identify carrier
+                    const packIdMatches = files.filter(f => f.fileName && f.fileName.includes(packID));
                     
-                    if (matches.length > 0) {
+                    // Check if any of the packID matches indicate Loomis
+                    const isLoomis = packIdMatches.some(f => f.fileName.toLowerCase().includes("loomis"));
+
+                    if (isLoomis) {
+                        // Loomis Way: Find the v2rs file
+                        const loomisMatch = files.find(f => f.fileName && f.fileName.toLowerCase().includes("v2rs"));
+                        if (loomisMatch) {
+                            targetUrl = loomisMatch.url;
+                            console.log(`Detected Loomis carrier via PackID. Resolved URL: ${targetUrl}`);
+                        }
+                    } else if (packIdMatches.length > 0) {
+                        // Standard Check: Use the matches found
                         // Prioritize file containing "Reply" if multiple matches exist
-                        let match = matches.find(f => f.fileName.toLowerCase().includes("reply") || f.fileName.toLowerCase().includes("response"));
+                        let match = packIdMatches.find(f => f.fileName.toLowerCase().includes("reply") || f.fileName.toLowerCase().includes("response"));
                         
                         // Fallback to the first match if no "Reply" file is found
                         if (!match) {
-                            match = matches[0];
+                            match = packIdMatches[0];
                         }
 
                         if (match && match.url) {
@@ -87,20 +98,16 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             }
         } catch (e) {
             if (signal.aborted) throw e;
-            console.warn("API resolution failed, falling back to pattern matching:", e);
+            console.warn("API resolution failed", e);
         }
 
-        // Strategy 2: Use expected URLs as a fallback (On-Prem legacy)
-        const urlDouble = `${cleanBase}/CarrierXmlFile/UPS_APIShipReply__${packID}.xml`;
-        const urlSingle = `${cleanBase}/CarrierXmlFile/UPS_APIShipReply_${packID}.xml`;
-        
         // Good error handling, commenting out but saving for later
         //if (!targetUrl) {
-        //    console.log(`API resolution skipped/failed. Will attempt pattern match: ${urlDouble} OR ${urlSingle}`);
+        //    console.log(`API resolution failed.`);
         //}
 
         // Retry logic for XML fetch (up to 1 minute)
-        let xmlResponse;
+        let fileResponse;
         let attempts = 0;
         const maxAttempts = 3;
 
@@ -112,31 +119,11 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                 try {
                     const resp = await fetch(targetUrl, { signal });
                     if (resp.ok) {
-                        xmlResponse = resp;
+                        fileResponse = resp;
                         break;
                     }
                 } catch (e) { if (signal.aborted) throw e; }
-            } else {
-                // Strategy 2: Guess patterns
-                try {
-                    const resp1 = await fetch(urlDouble, { signal });
-                    if (resp1.ok) {
-                        xmlResponse = resp1;
-                        console.log(`Found XML at: ${urlDouble}`);
-                        break; 
-                    }
-                } catch (e) { if (signal.aborted) throw e; }
-
-                // If not found, try single underscore
-                try {
-                    const resp2 = await fetch(urlSingle, { signal });
-                    if (resp2.ok) {
-                        xmlResponse = resp2;
-                        console.log(`Found XML at: ${urlSingle}`);
-                        break; 
-                    }
-                } catch (e) { if (signal.aborted) throw e; }
-            }
+            } 
             
             attempts++;
             if (attempts < maxAttempts) {
@@ -156,17 +143,17 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             }
         }
 
-        if (!xmlResponse || !xmlResponse.ok) {
-            if (xmlResponse.status === '') {
+        if (!fileResponse || !fileResponse.ok) {
+            if (fileResponse && fileResponse.status === '') {
                 throw new Error("No data found for this carrier.");
             }
-            throw new Error(`Failed to preview label with status code ${xmlResponse ? xmlResponse.status : 'Network Error'}).`);
+            throw new Error(`Failed to preview label, file not found. ${fileResponse ? fileResponse.status : 'Network Error'}.`);
         }
 
-        const xml = await xmlResponse.text();
+        const fileContent = await fileResponse.text();
 
         // Use helper from utils.js
-        const extracted = extractLabelData(xml);
+        const extracted = extractLabelData(fileContent);
         if (!extracted) {
             throw new Error("No recognized label image tag found in the XML response.");
         }
@@ -193,6 +180,8 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         // Good error handling, commented out to reduce console noise
         // console.log(`Sending ZPL to Labelary (${zpl.length} bytes)...`);
         
+        console.log("Selected format is :", format);
+
         // Prepare headers
         const labelaryHeaders = {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -202,6 +191,9 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         // Only apply rotation for UPS
         if (format === "UPS") {
             labelaryHeaders["X-Rotation"] = "180";
+        }
+        if (format === "Loomis") {
+            labelaryHeaders["X-Rotation"] = "90";
         }
 
         // Use the correct endpoint with index /0

@@ -10,12 +10,61 @@ function isValidBase64(str) {
     return /^[A-Za-z0-9+/=\s]+$/.test(str);
 }
 
-function extractLabelData(xml) {
-    // 1. DOMParser Strategy (Robust, Preferred)
+function extractLabelData(content) {
+    // 1. JSON Strategy
+    if (content && (content.trim().startsWith("{") || content.trim().startsWith("["))) {
+        try {
+            const json = JSON.parse(content);
+            
+            const jsonStrategies = [
+                { key: "LabelImage", format: "DHL" },
+                { key: "GraphicImage", format: "UPS" },
+                { key: "labelData", format: "EVRi" },
+                { key: "bolBase64", format: "TForce" },
+                { key: "Base64LabelImage", format: "Endicia" },
+                { key: "Image", format: "FedExEndicia" },
+                { key: "label", format: "Loomis" },
+                { key: "labels", format: "RoyalMail"},
+                { key: "label", format: "GenericLabel" },
+                { key: "OutputImage", format: "DHL" },
+                { key: "Bytes", format: "DHL" },
+                { key: "Data", format: "Purolator" }
+            ];
+
+            const findInJson = (node) => {
+                if (!node || typeof node !== 'object') return null;
+                
+                for (const { key, format } of jsonStrategies) {
+                    if (node[key]) {
+                        const val = node[key];
+                        if (typeof val === 'string' && isValidBase64(val)) {
+                            return { data: val, format };
+                        }
+                        if (key === "LabelImage" && val.Bytes && isValidBase64(val.Bytes)) {
+                            return { data: val.Bytes, format };
+                        }
+                    }
+                }
+
+                for (const k in node) {
+                    const res = findInJson(node[k]);
+                    if (res) return res;
+                }
+                return null;
+            };
+
+            const result = findInJson(json);
+            if (result) return result;
+        } catch (e) {
+            console.warn("JSON parse failed, falling back to XML/Regex", e);
+        }
+    }
+
+    // 2. DOMParser Strategy (Robust, Preferred)
     if (typeof DOMParser !== "undefined") {
         try {
             const parser = new DOMParser();
-            const doc = parser.parseFromString(xml, "application/xml");
+            const doc = parser.parseFromString(content, "application/xml");
             
             // Check for parse errors (DOMParser returns a document with <parsererror> on failure)
             const parserError = doc.querySelector("parsererror");
@@ -25,17 +74,19 @@ function extractLabelData(xml) {
                     // Specific / Nested
                     { selector: "LabelImage Bytes", format: "DHL" },
                     { selector: "Label Image",      format: "TNT" },
-                    { selector: "labels label",     format: "AusPost,Canpar" },
+                    { selector: "labels label",     format: "AusPost" },
+                    { selector: "labels label",     format: "Canpar" },
+                    { selector: "Data",             format: "Purolator" },
                     
                     // Unique Tags
                     { selector: "GraphicImage",     format: "UPS" },
-                    { selector: "labelImage",       format: "LoomisYodel" },
                     { selector: "labelData",        format: "EVRi" },
                     { selector: "bolBase64",        format: "TForce" },
                     { selector: "Base64LabelImage", format: "Endicia" },
                     
                     // Generic (Last resort)
                     { selector: "Image",            format: "FedExEndicia" },
+                    { selector: "label",            format: "Loomis" },
                     { selector: "label",            format: "GenericLabel" },
                     { selector: "OutputImage",      format: "DHL" },
                 ];
@@ -65,23 +116,25 @@ function extractLabelData(xml) {
         // Complex/Nested paths
         { pattern: /<LabelImage>[\s\S]*?<Bytes>([\s\S]+?)<\/Bytes>[\s\S]*?<\/LabelImage>/i, format: "DHL" },
         { pattern: /<Label>[\s\S]*?<Image>([\s\S]+?)<\/Image>[\s\S]*?<\/Label>/i,           format: "TNT" },
-        { pattern: /<labels>[\s\S]*?<label>([\s\S]+?)<\/label>[\s\S]*?<\/labels>/i,         format: "AusPost, Canpar" },
+        { pattern: /<labels>[\s\S]*?<label>([\s\S]+?)<\/label>[\s\S]*?<\/labels>/i,         format: "AusPost" },
+        { pattern: /<labels>[\s\S]*?<label>([\s\S]+?)<\/label>[\s\S]*?<\/labels>/i,         format: "Canpar" },
+        { pattern: /<Data>([\s\S]+?)<\/Data>/i,                                             format: "Purolator" },
 
         // Specific unique tags
         { pattern: /<GraphicImage>([\s\S]+?)<\/GraphicImage>/i, format: "UPS" },
-        { pattern: /<labelImage>([\s\S]+?)<\/labelImage>/i,     format: "LoomisYodel" },
         { pattern: /<labelData>([\s\S]+?)<\/labelData>/i,       format: "EVRi" },
         { pattern: /<bolBase64>([\s\S]+?)<\/bolBase64>/i,       format: "TForce" },
         { pattern: /<Base64LabelImage(?: [^>]*)?>([\s\S]+?)<\/Base64LabelImage>/i,    format: "Endicia" },
         
         // Common tags (checked last)
         { pattern: /<Image>([\s\S]+?)<\/Image>/i,                                     format: "FedExEndicia" },
+        { pattern: /<label>([\s\S]+?)<\/label>/i,                                     format: "Loomis" },
         { pattern: /<label>([\s\S]+?)<\/label>/i,                                     format: "GenericLabel" },
         { pattern: /<OutputImage>([\s\S]+?)<\/OutputImage>/i,                         format: "DHL" }
     ];
 
     for (const { pattern, format } of regexStrategies) {
-        const match = xml.match(pattern);
+        const match = content.match(pattern);
         if (match && match[1]) {
             let data = match[1].trim();
             // Remove CDATA wrapper if present
