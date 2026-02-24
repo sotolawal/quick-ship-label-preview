@@ -229,7 +229,7 @@
             `;
         }
 
-        showImage(base64Png) {
+        showImage(dataUrl, contentType) {
             const content = this.shadowRoot.getElementById("qs-content");
             const status = this.shadowRoot.getElementById("qs-status");
             
@@ -239,8 +239,13 @@
             status.style.backgroundColor = "#e8f5e9";
             status.style.color = "#2e7d32";
 
-            const src = base64Png.startsWith("data:") ? base64Png : `data:image/png;base64,${base64Png}`;
-            content.innerHTML = `<img src="${src}" class="qs-image" alt="Shipping Label" />`;
+            const src = dataUrl.startsWith("data:") ? dataUrl : `data:image/png;base64,${dataUrl}`;
+            
+            if (contentType === "application/pdf") {
+                content.innerHTML = `<iframe src="${src}" style="width:100%; height:400px; border:none;" title="Shipping Label PDF"></iframe>`;
+            } else {
+                content.innerHTML = `<img src="${src}" class="qs-image" alt="Shipping Label" />`;
+            }
         }
 
         showError(msg) {
@@ -295,7 +300,7 @@
         chrome.runtime.onMessage.addListener((msg) => {
             if (msg.type === "labelPreview") {
                 if (msg.success) {
-                    ui.showImage(msg.png);
+                    ui.showImage(msg.png, msg.contentType);
                 } else {
                     console.error("[Quick Ship] Label Generation Error:", msg.error);
                     ui.showError(msg.error || "Failed to generate label.");

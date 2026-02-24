@@ -68,9 +68,16 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                 if (Array.isArray(files)) {
                     // Filter for files containing the packID to identify carrier
                     const packIdMatches = files.filter(f => f.fileName && f.fileName.includes(packID));
-                    
+
+                    if (packIdMatches.length === 0) {
+                        sendError("Failed to preview label. File not found.");
+                        return;
+                    }
+
                     // Check if any of the packID matches indicate Loomis
                     const isLoomis = packIdMatches.some(f => f.fileName.toLowerCase().includes("loomis"));
+                    const isCanadaPost = packIdMatches.some(f => f.fileName.toLowerCase().includes("canadapost"));
+                    const isAusPost = packIdMatches.some(f => f.fileName.toLowerCase().includes("auspost"));
 
                     if (isLoomis) {
                         // Loomis Way: Find the v2rs file
@@ -78,6 +85,40 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                         if (loomisMatch) {
                             targetUrl = loomisMatch.url;
                             console.log(`Detected Loomis carrier via PackID. Resolved URL: ${targetUrl}`);
+                        }
+                    } else if (isCanadaPost) {
+                        // Canada Post Way: Find artifact ID in the packID file, then find the artifact file
+                        let match = packIdMatches.find(f => f.fileName.toLowerCase().includes("createshipmentresponse"));
+                        if (!match) match = packIdMatches[0];
+
+                        if (match) {
+                            try {
+                                const cpResp = await fetch(match.url, { signal });
+                                if (cpResp.ok) {
+                                    const cpText = await cpResp.text();
+                                    const artifactMatch = cpText.match(/<artifact-id>(.*?)<\/artifact-id>/);
+                                    if (artifactMatch && artifactMatch[1]) {
+                                        const artifactID = artifactMatch[1];
+                                        const fileWithLabel = files.find(f => f.fileName.includes("getArtifactResponse") && f.fileName.includes(artifactID));
+                                        if (fileWithLabel) {
+                                            targetUrl = fileWithLabel.url;
+                                            console.log(`Detected Canada Post. Resolved URL via Artifact ID: ${targetUrl}`);
+                                        }
+                                    }
+                                }
+                        else if (isAusPost) {
+                                    // Australia Post Way: Look for "Label Image" in the packID file content
+                                    const ausMatch = packIdMatches.find(f => f.fileName && f.fileName.toLowerCase().includes("createlabelresponse"));
+                                    if (!ausMatch) match = packIdMatches[0];
+
+                                    if (ausMatch) {
+                                        targetUrl = ausMatch.url;
+                                        console.log(`Detected Australia Post. Using packID file URL: ${targetUrl}`);
+                                    }       
+                        }
+                            } catch (e) {
+                                console.warn("Failed to fetch Canada Post artifact info", e);
+                            }
                         }
                     } else if (packIdMatches.length > 0) {
                         // Standard Check: Use the matches found
@@ -147,7 +188,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             if (fileResponse && fileResponse.status === '') {
                 throw new Error("No data found for this carrier.");
             }
-            throw new Error(`Failed to preview label. File not found. ${fileResponse ? fileResponse.status : 'Error'}.`);
+            throw new Error(`Failed to preview label. ${fileResponse ? fileResponse.status : 'Error'}.`);
         }
 
         const fileContent = await fileResponse.text();
@@ -160,59 +201,81 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         
         const { data: base64, format } = extracted;
 
-        let zpl = "";
+        let isPdf = false;
+        // Check for PDF signature (Magic bytes: %PDF)
         try {
-            zpl = atob(base64);
-        } catch (err) {
-            throw new Error("Failed to decode base64 label data.");
+            const decodedHeader = atob(base64.substring(0, 50));
+            if (decodedHeader.startsWith("%PDF")) {
+                isPdf = true;
+            }
+        } catch (e) { /* ignore decode errors here, handled later */ }
+
+        let finalDataUrl = "";
+        let contentType = "";
+
+        if (isPdf) {
+            console.log("Detected PDF label format.");
+            contentType = "application/pdf";
+            finalDataUrl = `data:application/pdf;base64,${base64}`;
+        } else {
+            // Assume ZPL and convert via Labelary
+            let zpl = "";
+            try {
+                zpl = atob(base64);
+            } catch (err) {
+                throw new Error("Failed to decode base64 label data.");
+            }
+
+            // Clean ZPL for Labelary
+            zpl = zpl.replace(/\r\n/g, "\n")
+                    .replace(/\r/g, "\n")
+                    .replace(/\0/g, "")
+                    .trim();
+
+            if (!zpl) {
+                throw new Error("Decoded ZPL data is empty.");
+            }
+            
+            console.log("Selected format is :", format);
+
+            // Prepare headers
+            const labelaryHeaders = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "image/png"
+            };
+            
+            // Only apply rotation for UPS
+            if (format === "UPS") {
+                labelaryHeaders["X-Rotation"] = "180";
+            }
+            if (format === "Loomis") {
+                labelaryHeaders["X-Rotation"] = "90";
+            }
+
+            const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
+                method: "POST",
+                headers: labelaryHeaders,
+                body: zpl,
+                signal
+            });
+
+            if (!labelaryResp.ok) {
+                const errorText = await labelaryResp.text();
+                console.error("Labelary API Response:", errorText);
+                throw new Error(`Labelary API Error (${labelaryResp.status}): ${errorText || labelaryResp.statusText}`);
+            }
+
+            const pngBlob = await labelaryResp.blob();
+            const b64png = await blobToBase64(pngBlob);
+            
+            contentType = "image/png";
+            finalDataUrl = b64png; // blobToBase64 returns data: URL or just base64? Utils says reader.result which is Data URL.
+            // Wait, utils.js blobToBase64 returns Data URL (reader.result). 
+            // But existing code treated it as raw base64 in some places? 
+            // Actually utils.js blobToBase64 returns "data:image/png;base64,..."
+            // The previous code passed `b64png` to UI.
+            finalDataUrl = b64png;
         }
-
-        // Clean ZPL for Labelary
-        zpl = zpl.replace(/\r\n/g, "\n")
-                 .replace(/\r/g, "\n")
-                 .replace(/\0/g, "")
-                 .trim();
-
-        if (!zpl) {
-            throw new Error("Decoded ZPL data is empty.");
-        }
-
-        // Good error handling, commented out to reduce console noise
-        // console.log(`Sending ZPL to Labelary (${zpl.length} bytes)...`);
-        
-        console.log("Selected format is :", format);
-
-        // Prepare headers
-        const labelaryHeaders = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "image/png"
-        };
-        
-        // Only apply rotation for UPS
-        if (format === "UPS") {
-            labelaryHeaders["X-Rotation"] = "180";
-        }
-        if (format === "Loomis") {
-            labelaryHeaders["X-Rotation"] = "90";
-        }
-
-        // Use the correct endpoint with index /0
-        // Use application/x-www-form-urlencoded as per docs for raw body
-        const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
-            method: "POST",
-            headers: labelaryHeaders,
-            body: zpl,
-            signal
-        });
-
-        if (!labelaryResp.ok) {
-            const errorText = await labelaryResp.text();
-            console.error("Labelary API Response:", errorText);
-            throw new Error(`Labelary API Error (${labelaryResp.status}): ${errorText || labelaryResp.statusText}`);
-        }
-
-        const pngBlob = await labelaryResp.blob();
-        const b64png = await blobToBase64(pngBlob);
 
         // Extract hostname for history
         let website = "";
@@ -227,14 +290,15 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             packID: packID,
             website: website,
             timestamp: Date.now(),
-            png: b64png
+            png: finalDataUrl // Storing full Data URL here works with existing popup logic
         });
 
         if (!signal.aborted) {
             chrome.tabs.sendMessage(tabId, {
                 type: "labelPreview",
                 success: true,
-                png: b64png
+                png: finalDataUrl,
+                contentType: contentType
             });
         }
 
