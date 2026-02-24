@@ -147,7 +147,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             if (fileResponse && fileResponse.status === '') {
                 throw new Error("No data found for this carrier.");
             }
-            throw new Error(`Failed to preview label, file not found. ${fileResponse ? fileResponse.status : 'Network Error'}.`);
+            throw new Error(`Failed to preview label. File not found. ${fileResponse ? fileResponse.status : 'Error'}.`);
         }
 
         const fileContent = await fileResponse.text();
