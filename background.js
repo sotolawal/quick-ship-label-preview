@@ -120,19 +120,16 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                                         }
                                     }
                                 }
-                        else if (isAusPost) {
-                                    // Australia Post Way: Look for "Label Image" in the packID file content
-                                    const ausMatch = packIdMatches.find(f => f.fileName && f.fileName.toLowerCase().includes("createlabelresponse"));
-                                    if (!ausMatch) match = packIdMatches[0];
-
-                                    if (ausMatch) {
-                                        targetUrl = ausMatch.url;
-                                        console.log(`Detected Australia Post. Using packID file URL: ${targetUrl}`);
-                                    }       
-                        }
                             } catch (e) {
                                 console.warn("Failed to fetch Canada Post artifact info", e);
                             }
+                        }
+                    } else if (isAusPost) {
+                        // Australia Post Way: Look for "Label Image" in the packID file content
+                        const ausMatch = packIdMatches.find(f => f.fileName && f.fileName.toLowerCase().includes("createlabelresponse"));
+                        if (ausMatch) {
+                            targetUrl = ausMatch.url;
+                            console.log(`Detected Australia Post. Using packID file URL: ${targetUrl}`);
                         }
                     } else if (packIdMatches.length > 0) {
                         // Standard Check: Use the matches found
