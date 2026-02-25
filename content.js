@@ -172,6 +172,51 @@
                     margin-bottom: 8px;
                     display: block;
                 }
+                
+                /* Controls */
+                .qs-controls {
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    gap: 16px;
+                    padding: 12px 16px;
+                    background: #fff;
+                    border-top: 1px solid #eee;
+                    width: 100%;
+                    box-sizing: border-box;
+                }
+                .qs-nav-btn {
+                    background: rgb(13, 109, 160);
+                    border: none;
+                    border-radius: 50%;
+                    width: 28px;
+                    height: 28px;
+                    padding: 0;
+                    display: flex;
+                    align-items: safe center;
+                    justify-content: safe center;
+                    cursor: pointer;
+                    font-size: 20px;
+                    font-weight: bold;
+                    color: white;
+                    transition: all 0.2s;
+                    line-height: 1;
+                }
+                .qs-nav-btn:hover:not(:disabled) {
+                    background: rgba(13, 109, 160, 0.8);
+                }
+                .qs-nav-btn:active:not(:disabled) {
+                    background:  rgba(13, 109, 160, 0.15);
+                }
+                .qs-nav-btn:disabled {
+                    opacity: 0.4;
+                    cursor: default;
+                }
+                .qs-page-indicator {
+                    font-size: 13px;
+                    color: #555;
+                    font-weight: 600;
+                }
 
                 @keyframes slideUp {
                     from { opacity: 0; transform: translateY(20px); }
@@ -229,7 +274,7 @@
             `;
         }
 
-        showImage(dataUrl, contentType) {
+        showImage(images) {
             const content = this.shadowRoot.getElementById("qs-content");
             const status = this.shadowRoot.getElementById("qs-status");
             
@@ -238,14 +283,62 @@
             status.textContent = "Ready";
             status.style.backgroundColor = "#e8f5e9";
             status.style.color = "#2e7d32";
-
-            const src = dataUrl.startsWith("data:") ? dataUrl : `data:image/png;base64,${dataUrl}`;
             
-            if (contentType === "application/pdf") {
-                content.innerHTML = `<iframe src="${src}" style="width:100%; height:400px; border:none;" title="Shipping Label PDF"></iframe>`;
-            } else {
-                content.innerHTML = `<img src="${src}" class="qs-image" alt="Shipping Label" />`;
+            content.innerHTML = ""; // Clear previous
+
+            if (!images || images.length === 0) return;
+
+            // Container for the view
+            const wrapper = document.createElement("div");
+            wrapper.style.display = "flex";
+            wrapper.style.flexDirection = "column";
+            wrapper.style.width = "100%";
+
+            // Image Area
+            const imgView = document.createElement("div");
+            imgView.style.width = "100%";
+            imgView.style.display = "flex";
+            imgView.style.justifyContent = "center";
+            wrapper.appendChild(imgView);
+
+            let currentIndex = 0;
+
+            const renderCurrent = () => {
+                const img = images[currentIndex];
+                if (img.type === "application/pdf") {
+                    imgView.innerHTML = `<iframe src="${img.src}" style="width:100%; height:400px; border:none;" title="Shipping Label PDF"></iframe>`;
+                } else {
+                    imgView.innerHTML = `<img src="${img.src}" class="qs-image" alt="Shipping Label ${currentIndex + 1}" />`;
+                }
+            };
+
+            // Controls (only if multiple images)
+            if (images.length > 1) {
+                const controls = document.createElement("div");
+                controls.className = "qs-controls";
+                controls.innerHTML = `
+                    <button class="qs-nav-btn" id="qs-prev" disabled>&#x1F808;</button>
+                    <span class="qs-page-indicator" id="qs-indicator">1 / ${images.length}</span>
+                    <button class="qs-nav-btn" id="qs-next">&#x1F80A;</button>
+                `;
+                wrapper.appendChild(controls);
+
+                const prevBtn = controls.querySelector("#qs-prev");
+                const nextBtn = controls.querySelector("#qs-next");
+                const indicator = controls.querySelector("#qs-indicator");
+
+                const updateControls = () => {
+                    indicator.textContent = `${currentIndex + 1} / ${images.length}`;
+                    prevBtn.disabled = currentIndex === 0;
+                    nextBtn.disabled = currentIndex === images.length - 1;
+                };
+
+                prevBtn.onclick = () => { if (currentIndex > 0) { currentIndex--; renderCurrent(); updateControls(); } };
+                nextBtn.onclick = () => { if (currentIndex < images.length - 1) { currentIndex++; renderCurrent(); updateControls(); } };
             }
+            
+            renderCurrent();
+            content.appendChild(wrapper);
         }
 
         showError(msg) {
@@ -300,7 +393,7 @@
         chrome.runtime.onMessage.addListener((msg) => {
             if (msg.type === "labelPreview") {
                 if (msg.success) {
-                    ui.showImage(msg.png, msg.contentType);
+                    ui.showImage(msg.images);
                 } else {
                     console.error("[Quick Ship] Label Generation Error:", msg.error);
                     ui.showError(msg.error || "Failed to generate label.");

@@ -231,7 +231,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             // Open Image
             el.addEventListener("click", (e) => {
                 if (e.target.closest(".delete-btn")) return;
-                openInNewTab(item.png);
+                // Support new 'images' array or fallback to old 'png' string
+                openInNewTab(item.images || (item.png ? [item.png] : []));
             });
 
             // Delete Individual Item
@@ -253,19 +254,52 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
 
-    function openInNewTab(base64) {
-        const src = base64.startsWith("data:") ? base64 : `data:image/png;base64,${base64}`;
-        
-        fetch(src)
-            .then(res => res.blob())
-            .then(blob => {
-                const url = URL.createObjectURL(blob);
-                chrome.tabs.create({ url: url }, () => {
-                    // Revoke the object URL after a delay to allow the tab to load it.
-                    // If the popup closes before this, the browser handles cleanup.
-                    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    function openInNewTab(items) {
+        if (!items || items.length === 0) return;
+
+        // If single image, open directly
+        if (items.length === 1) {
+            const base64 = items[0];
+            const src = base64.startsWith("data:") ? base64 : `data:image/png;base64,${base64}`;
+            
+            fetch(src)
+                .then(res => res.blob())
+                .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    chrome.tabs.create({ url: url }, () => {
+                        setTimeout(() => URL.revokeObjectURL(url), 10000);
+                    });
                 });
-            });
+            return;
+        }
+
+        // If multiple images, create a gallery page
+        const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Label Preview (${items.length} items)</title>
+                <style>
+                    body { font-family: sans-serif; background: #f5f5f5; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
+                    .label-card { background: white; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; max-width: 95vw; box-sizing: border-box; }
+                    img { max-width: 100%; height: auto; display: block; }
+                    iframe { width: 90vw; height: 90vh; border: none; }
+                    .page-num { text-align: center; color: #444; margin-bottom: 10px; font-size: 18px; font-weight: bold; }
+                </style>
+            </head>
+            <body>
+                ${items.map((img, idx) => {
+                    const src = img.startsWith("data:") ? img : `data:image/png;base64,${img}`;
+                    const isPdf = src.includes("application/pdf");
+                    return `<div class="label-card"><div class="page-num">Label ${idx + 1}</div>${isPdf ? `<iframe src="${src}"></iframe>` : `<img src="${src}" />`}</div>`;
+                }).join('')}
+            </body>
+            </html>
+        `;
+        
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        chrome.tabs.create({ url }, () => setTimeout(() => URL.revokeObjectURL(url), 10000));
     }
 
     loadHistory();

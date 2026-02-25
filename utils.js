@@ -11,6 +11,9 @@ function isValidBase64(str) {
 }
 
 function extractLabelData(content) {
+    const results = [];
+    let detectedFormat = null;
+
     // 1. JSON Strategy
     if (content && (content.trim().startsWith("{") || content.trim().startsWith("["))) {
         try {
@@ -28,33 +31,40 @@ function extractLabelData(content) {
                 { key: "label", format: "GenericLabel" },
                 { key: "OutputImage", format: "DHL" },
                 { key: "Bytes", format: "DHL" },
-                { key: "Data", format: "Purolator" }
+                { key: "Data", format: "Purolator" },
+                { key: "data", format: "TForce" }
             ];
 
             const findInJson = (node) => {
-                if (!node || typeof node !== 'object') return null;
+                if (!node || typeof node !== 'object') return;
                 
                 for (const { key, format } of jsonStrategies) {
-                    if (node[key]) {
+                    if (Object.prototype.hasOwnProperty.call(node, key)) {
                         const val = node[key];
                         if (typeof val === 'string' && isValidBase64(val)) {
-                            return { data: val, format };
+                            results.push(val);
+                            if (!detectedFormat) detectedFormat = format;
                         }
-                        if (key === "LabelImage" && val.Bytes && isValidBase64(val.Bytes)) {
-                            return { data: val.Bytes, format };
+
+                        if (Array.isArray(val)) {
+                            for (const item of val) {
+                                if (typeof item === 'string' && isValidBase64(item)) {
+                                    results.push(item);
+                                    if (!detectedFormat) detectedFormat = format;
+                                }
+                            }
                         }
                     }
                 }
 
-                for (const k in node) {
-                    const res = findInJson(node[k]);
-                    if (res) return res;
+                if (Array.isArray(node)) {
+                    node.forEach(child => findInJson(child));
+                } else {
+                    Object.values(node).forEach(child => findInJson(child));
                 }
-                return null;
             };
 
-            const result = findInJson(json);
-            if (result) return result;
+            findInJson(json);
         } catch (e) {
             console.warn("JSON parse failed, falling back to XML/Regex", e);
         }
@@ -75,7 +85,9 @@ function extractLabelData(content) {
                     { selector: "LabelImage Bytes", format: "DHL" },
                     { selector: "Label Image",      format: "TNT" },
                     { selector: "labels label",     format: "AusPost" },
-                    { selector: "labels label",     format: "Canpar" },
+                    { type: "ns", 
+                      ns: "http://ws.dto.canshipws.canpar.com/xsd", 
+                      selector: "labels",           format: "Canpar" },
                     { selector: "Data",             format: "Purolator" },
                     
                     // Unique Tags
@@ -100,7 +112,8 @@ function extractLabelData(content) {
                         if (node.children.length === 0) {
                             const content = node.textContent.trim();
                             if (isValidBase64(content)) {
-                                return { data: content, format: format };
+                                results.push(content);
+                                if (!detectedFormat) detectedFormat = format;
                             }
                         }
                     }
@@ -117,13 +130,13 @@ function extractLabelData(content) {
         { pattern: /<LabelImage>[\s\S]*?<Bytes>([\s\S]+?)<\/Bytes>[\s\S]*?<\/LabelImage>/i, format: "DHL" },
         { pattern: /<Label>[\s\S]*?<Image>([\s\S]+?)<\/Image>[\s\S]*?<\/Label>/i,           format: "TNT" },
         { pattern: /<labels>[\s\S]*?<label>([\s\S]+?)<\/label>[\s\S]*?<\/labels>/i,         format: "AusPost" },
-        { pattern: /<labels>[\s\S]*?<label>([\s\S]+?)<\/label>[\s\S]*?<\/labels>/i,         format: "Canpar" },
+        { pattern: /<labels\b[^>]*>([\s\S]+?)<\/labels>/i,                                  format: "Canpar" },
         { pattern: /<Data>([\s\S]+?)<\/Data>/i,                                             format: "Purolator" },
 
         // Specific unique tags
-        { pattern: /<GraphicImage>([\s\S]+?)<\/GraphicImage>/i, format: "UPS" },
-        { pattern: /<labelData>([\s\S]+?)<\/labelData>/i,       format: "EVRi" },
-        { pattern: /<bolBase64>([\s\S]+?)<\/bolBase64>/i,       format: "TForce" },
+        { pattern: /<GraphicImage>([\s\S]+?)<\/GraphicImage>/i,                       format: "UPS" },
+        { pattern: /<labelData>([\s\S]+?)<\/labelData>/i,                             format: "EVRi" },
+        { pattern: /<bolBase64>([\s\S]+?)<\/bolBase64>/i,                             format: "TForce" },
         { pattern: /<Base64LabelImage(?: [^>]*)?>([\s\S]+?)<\/Base64LabelImage>/i,    format: "Endicia" },
         
         // Common tags (checked last)
@@ -134,21 +147,25 @@ function extractLabelData(content) {
     ];
 
     for (const { pattern, format } of regexStrategies) {
-        const match = content.match(pattern);
-        if (match && match[1]) {
-            let data = match[1].trim();
-            // Remove CDATA wrapper if present
-            if (data.startsWith("<![CDATA[") && data.endsWith("]]>")) {
-                data = data.substring(9, data.length - 3).trim();
-            }
-            
-            // Validate to avoid returning XML fragments or empty strings
-            if (isValidBase64(data)) {
-                return { data: data, format: format };
+        const flags = pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g';
+        const globalRegex = new RegExp(pattern.source, flags);
+        let match;
+        while ((match = globalRegex.exec(content)) !== null) {
+            if (match[1]) {
+                let data = match[1].trim();
+                if (data.startsWith("<![CDATA[") && data.endsWith("]]>")) {
+                    data = data.substring(9, data.length - 3).trim();
+                }
+                if (isValidBase64(data)) {
+                    results.push(data);
+                    if (!detectedFormat) detectedFormat = format;
+                }
             }
         }
     }
 
+    const unique = [...new Set(results)];
+    if (unique.length > 0) return { data: unique, format: detectedFormat };
     return null;
 }
 

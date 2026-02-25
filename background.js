@@ -199,82 +199,70 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             throw new Error("No recognized label image tag found in the XML response.");
         }
         
-        const { data: base64, format } = extracted;
+        const { data: rawData, format } = extracted;
+        const dataList = Array.isArray(rawData) ? rawData : [rawData];
+        const processedImages = [];
 
-        let isPdf = false;
-        // Check for PDF signature (Magic bytes: %PDF)
-        try {
-            const decodedHeader = atob(base64.substring(0, 50));
-            if (decodedHeader.startsWith("%PDF")) {
-                isPdf = true;
-            }
-        } catch (e) { /* ignore decode errors here, handled later */ }
-
-        let finalDataUrl = "";
-        let contentType = "";
-
-        if (isPdf) {
-            console.log("Detected PDF label format.");
-            contentType = "application/pdf";
-            finalDataUrl = `data:application/pdf;base64,${base64}`;
-        } else {
-            // Assume ZPL and convert via Labelary
-            let zpl = "";
+        for (const base64 of dataList) {
+            let isPdf = false;
             try {
-                zpl = atob(base64);
-            } catch (err) {
-                throw new Error("Failed to decode base64 label data.");
-            }
+                const decodedHeader = atob(base64.substring(0, 50));
+                if (decodedHeader.startsWith("%PDF")) {
+                    isPdf = true;
+                }
+            } catch (e) { /* ignore */ }
 
-            // Clean ZPL for Labelary
-            zpl = zpl.replace(/\r\n/g, "\n")
-                    .replace(/\r/g, "\n")
-                    .replace(/\0/g, "")
-                    .trim();
+            if (isPdf) {
+                processedImages.push({
+                    src: `data:application/pdf;base64,${base64}`,
+                    type: "application/pdf"
+                });
+            } else {
+                // Assume ZPL
+                let zpl = "";
+                try {
+                    zpl = atob(base64);
+                } catch (err) {
+                    console.warn("Failed to decode base64 label data", err);
+                    continue;
+                }
 
-            if (!zpl) {
-                throw new Error("Decoded ZPL data is empty.");
-            }
+                zpl = zpl.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\0/g, "").trim();
+                if (!zpl) continue;
+
+                const labelaryHeaders = {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "image/png"
+                };
+                
+                switch(format) {
+                    case "UPS": labelaryHeaders["X-Rotation"] = "180"; break;
+                    case "Loomis": labelaryHeaders["X-Rotation"] = "90"; break;
+                    case "Canpar": labelaryHeaders["X-Rotation"] = "180"; break;
+                }
             
-            console.log("Selected format is :", format);
+                const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
+                    method: "POST",
+                    headers: labelaryHeaders,
+                    body: zpl,
+                    signal
+                });
 
-            // Prepare headers
-            const labelaryHeaders = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "image/png"
-            };
-            
-            // Only apply rotation for UPS
-            if (format === "UPS") {
-                labelaryHeaders["X-Rotation"] = "180";
+                if (labelaryResp.ok) {
+                    const pngBlob = await labelaryResp.blob();
+                    const b64png = await blobToBase64(pngBlob);
+                    processedImages.push({
+                        src: b64png,
+                        type: "image/png"
+                    });
+                } else {
+                    console.warn("Labelary failed for one label", await labelaryResp.text());
+                }
             }
-            if (format === "Loomis") {
-                labelaryHeaders["X-Rotation"] = "90";
-            }
+        }
 
-            const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
-                method: "POST",
-                headers: labelaryHeaders,
-                body: zpl,
-                signal
-            });
-
-            if (!labelaryResp.ok) {
-                const errorText = await labelaryResp.text();
-                console.error("Labelary API Response:", errorText);
-                throw new Error(`Labelary API Error (${labelaryResp.status}): ${errorText || labelaryResp.statusText}`);
-            }
-
-            const pngBlob = await labelaryResp.blob();
-            const b64png = await blobToBase64(pngBlob);
-            
-            contentType = "image/png";
-            finalDataUrl = b64png; // blobToBase64 returns data: URL or just base64? Utils says reader.result which is Data URL.
-            // Wait, utils.js blobToBase64 returns Data URL (reader.result). 
-            // But existing code treated it as raw base64 in some places? 
-            // Actually utils.js blobToBase64 returns "data:image/png;base64,..."
-            // The previous code passed `b64png` to UI.
-            finalDataUrl = b64png;
+        if (processedImages.length === 0) {
+            throw new Error("Failed to process any valid labels.");
         }
 
         // Extract hostname for history
@@ -290,15 +278,14 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             packID: packID,
             website: website,
             timestamp: Date.now(),
-            png: finalDataUrl // Storing full Data URL here works with existing popup logic
+            images: processedImages.map(img => img.src) // Store all images
         });
 
         if (!signal.aborted) {
             chrome.tabs.sendMessage(tabId, {
                 type: "labelPreview",
                 success: true,
-                png: finalDataUrl,
-                contentType: contentType
+                images: processedImages
             });
         }
 
