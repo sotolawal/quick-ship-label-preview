@@ -21,6 +21,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 //Check if PackID message is sucessfully received
 chrome.runtime.onMessage.addListener(async (msg, sender) => {
     if (msg.type === "packID") {
+        // Check if paused
+        const settings = await chrome.storage.local.get("isPaused");
+        if (settings.isPaused) {
+            console.log("[Quick Ship] Processing skipped (Paused):", msg.packID);
+            return;
+        }
+
         await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders);
         console.log("[Quick Ship] PackID message processed:", msg.packID);
     }

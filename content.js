@@ -365,8 +365,16 @@
     // Event Listeners
 
     // Listen for PackID detection from Injected Script
-    window.addEventListener("label_packid_found", (e) => {
+    window.addEventListener("label_packid_found", async (e) => {
         const { packID, baseUrl, authHeaders } = e.detail;
+        
+        // Check if extension is paused
+        const settings = await chrome.storage.local.get("isPaused");
+        if (settings.isPaused) {
+            console.log("[Quick Ship] Extension is paused. Ignoring PackID:", packID);
+            return;
+        }
+
         console.log("[Quick Ship] PackID detected:", packID, "on base URL:", baseUrl);
 
         // Show loading state immediately

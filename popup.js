@@ -8,6 +8,43 @@ document.addEventListener("DOMContentLoaded", async () => {
     
     let fullHistory = [];
 
+    // --- Pause/Play Functionality ---
+    const pauseBtn = document.createElement("button");
+    pauseBtn.id = "pause-btn";
+    // Basic styling to match typical icon buttons
+    pauseBtn.style.background = "none";
+    pauseBtn.style.border = "none";
+    pauseBtn.style.cursor = "pointer";
+    pauseBtn.style.padding = "4px";
+    pauseBtn.style.marginRight = "8px";
+    pauseBtn.style.display = "flex";
+    pauseBtn.style.alignItems = "center";
+    
+    // Insert before the search button
+    if (toggleSearchBtn && toggleSearchBtn.parentNode) {
+        toggleSearchBtn.parentNode.insertBefore(pauseBtn, toggleSearchBtn);
+    }
+
+    function updatePauseUI(isPaused) {
+        // Icons: Pause (Standard Grey) / Play (Blue to indicate action needed to resume)
+        const pauseIcon = `<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24" fill="#fff"><path d="M560-200v-560h160v560H560Zm-320 0v-560h160v560H240Z"/></svg>`;
+        const playIcon = `<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24" fill="#fff"><path d="M320-200v-560l440 280-440 280Z"/></svg>`;
+        
+        pauseBtn.innerHTML = isPaused ? playIcon : pauseIcon;
+        pauseBtn.title = isPaused ? "Resume Label Generation" : "Pause Label Generation";
+    }
+
+    // Initialize State
+    const initialSettings = await chrome.storage.local.get("isPaused");
+    updatePauseUI(initialSettings.isPaused);
+
+    pauseBtn.addEventListener("click", async () => {
+        const settings = await chrome.storage.local.get("isPaused");
+        const newState = !settings.isPaused;
+        await chrome.storage.local.set({ isPaused: newState });
+        updatePauseUI(newState);
+    });
+
     // --- Debounce Utility ---
     function debounce(func, wait) {
         let timeout;
