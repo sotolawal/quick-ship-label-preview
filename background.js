@@ -38,12 +38,19 @@ const activeRequests = new Map();
 async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     // Cancel any existing request for this tab
     if (activeRequests.has(tabId)) {
+        const active = activeRequests.get(tabId);
+        // If the same packID is already being processed, ignore this duplicate request
+        if (active.packID === packID && !active.controller.signal.aborted) {
+            console.log(`[Quick Ship] Request for packID ${packID} already in progress. Ignoring duplicate.`);
+            return;
+        }
+
         console.log(`[Quick Ship] Aborting previous request for tab ${tabId}`);
-        activeRequests.get(tabId).abort();
+        active.controller.abort();
     }
 
     const controller = new AbortController();
-    activeRequests.set(tabId, controller);
+    activeRequests.set(tabId, { controller, packID });
     const signal = controller.signal;
 
     const sendError = (errMsg) => {
@@ -305,7 +312,8 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
         }
     } finally {
         // Cleanup: remove from activeRequests if it's still this controller
-        if (activeRequests.get(tabId) === controller) {
+        const active = activeRequests.get(tabId);
+        if (active && active.controller === controller) {
             activeRequests.delete(tabId);
         }
     }
