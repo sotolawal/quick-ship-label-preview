@@ -12,14 +12,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     const pauseBtn = document.createElement("button");
     pauseBtn.id = "pause-btn";
     // Basic styling to match typical icon buttons
-    pauseBtn.style.background = "none";
-    pauseBtn.style.border = "none";
-    pauseBtn.style.cursor = "pointer";
-    pauseBtn.style.padding = "4px";
+    pauseBtn.className = "icon-btn";
     pauseBtn.style.marginRight = "8px";
-    pauseBtn.style.display = "flex";
-    pauseBtn.style.alignItems = "center";
-    
+
     // Insert before the search button
     if (toggleSearchBtn && toggleSearchBtn.parentNode) {
         toggleSearchBtn.parentNode.insertBefore(pauseBtn, toggleSearchBtn);
