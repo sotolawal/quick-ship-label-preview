@@ -164,6 +164,46 @@ function extractLabelData(content) {
         }
     }
 
+    // 3. Raw Base64 Fallback Strategy
+    // If no specific format was detected, check if the entire content is a valid base64 string
+    if (results.length === 0) {
+        const trimmed = content ? content.trim() : "";
+        if (isValidBase64(trimmed)) {
+            return { data: [trimmed], format: "RawBase64" };
+        }
+
+        // 4. Loose Extraction Strategy (The "Crazy Copy" Handler)
+        // The user might have copied a large block of text (like a full XML dump or a page selection)
+        // that contains the base64 string but failed previous parsers (e.g. malformed XML).
+        // We strip whitespace and look for the longest contiguous block of base64 characters.
+        const cleanContent = (content || "").replace(/\s/g, "");
+        
+        // Find sequences of valid base64 characters (A-Z, a-z, 0-9, +, /, =)
+        // We enforce a minimum length (e.g., 100) to avoid false positives from regular text.
+        const candidates = cleanContent.match(/[A-Za-z0-9+/=]{100,}/g);
+
+        if (candidates) {
+            // Sort by length, descending (assume the label is the biggest blob)
+            candidates.sort((a, b) => b.length - a.length);
+
+            for (let candidate of candidates) {
+                // Truncate after padding if present to handle "Data==Garbage"
+                const paddingIndex = candidate.indexOf("=");
+                if (paddingIndex !== -1) {
+                    // Check for double padding "=="
+                    const end = candidate[paddingIndex + 1] === "=" ? paddingIndex + 2 : paddingIndex + 1;
+                    candidate = candidate.substring(0, end);
+                }
+
+                if (isValidBase64(candidate)) {
+                    results.push(candidate);
+                    if (!detectedFormat) detectedFormat = "ScrubbedBase64";
+                    break; // Found the likely candidate
+                }
+            }
+        }
+    }
+
     const unique = [...new Set(results)];
     if (unique.length > 0) return { data: unique, format: detectedFormat };
     return null;

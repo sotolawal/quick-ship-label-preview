@@ -38,14 +38,36 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
         console.log("[Quick Ship] PackID message processed:", msg.packID);
     } else if (msg.type === "analyzeText") {
         // Handle clipboard content
-        await processLabelContent(msg.text, sender.tab.id, "Clipboard", sender.tab.url);
+        let tabId = sender.tab ? sender.tab.id : null;
+        let url = sender.tab ? sender.tab.url : "Popup";
+
+        // If request came from Popup (no sender tab), try to target the active tab
+        if (!tabId) {
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tabs && tabs.length > 0) {
+                // Check if we can inject into this tab by trying to send the loading signal
+                const canInject = await sendToTabSafe(tabs[0].id, { type: "startLoading" });
+                if (canInject) {
+                    tabId = tabs[0].id;
+                    url = tabs[0].url;
+                }
+            }
+        }
+
+        await processLabelContent(msg.text, tabId, "Clipboard", url);
     }
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "qs-preview-label" && info.selectionText) {
         // Handle context menu selection
-        await processLabelContent(info.selectionText, tab.id, "Selection", tab.url);
+        const canRender = await sendToTabSafe(tab.id, { type: "startLoading" });
+        
+        // If the tab cannot render (e.g. XML file), pass null for tabId so processLabelContent
+        // knows to fallback to opening a new tab.
+        const targetTabId = canRender ? tab.id : null;
+        
+        await processLabelContent(info.selectionText, targetTabId, "Selection", tab.url);
     }
 });
 
@@ -247,6 +269,9 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         // Use helper from utils.js to find base64 data
         const extracted = extractLabelData(fileContent);
         if (!extracted) {
+            if (historyLabel === "Clipboard" || historyLabel === "Selection") {
+                throw new Error("No valid label data found in the copied text.");
+            }
             throw new Error("No recognized label image tag found in the XML response.");
         }
         
@@ -333,22 +358,112 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         });
 
         if (!signal || !signal.aborted) {
-            chrome.tabs.sendMessage(tabId, {
+            const payload = {
                 type: "labelPreview",
                 success: true,
                 images: processedImages
-            });
+            };
+
+            if (tabId) {
+                chrome.tabs.sendMessage(tabId, payload);
+            } else if (baseUrl === "Popup") {
+                // If request came from Popup, send back to runtime
+                chrome.runtime.sendMessage(payload);
+            } else {
+                // If no target tab and not from Popup (e.g. XML page context menu), 
+                // open result in a new tab directly.
+                await openViewerTab(processedImages);
+            }
         }
     } catch (err) {
         // If signal exists and is aborted, suppress error
         if (signal && (signal.aborted || err.name === 'AbortError')) return;
         
+        const isNoData = err.message === "No valid label data found in the copied text.";
+
         // Send error to tab
-        chrome.tabs.sendMessage(tabId, {
+        const errorPayload = {
             type: "labelPreview",
             success: false,
-            error: err.message || "Failed to process label data."
-        });
+            error: err.message || "Failed to process label data.",
+            isNoData: isNoData
+        };
+
+        if (tabId) {
+            chrome.tabs.sendMessage(tabId, errorPayload);
+        } else if (baseUrl === "Popup") {
+            chrome.runtime.sendMessage(errorPayload);
+        }
+    }
+}
+
+async function openViewerTab(images) {
+    // Construct HTML for the viewer
+    const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Label Preview</title>
+            <style>
+                body { font-family: sans-serif; background: #f5f5f5; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
+                .label-card { background: white; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; max-width: 95vw; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; }
+                .header { width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+                .page-num { color: #444; font-size: 18px; font-weight: bold; }
+                .btn { background: #0d6da0; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
+                .btn:hover { background: #095c8a; }
+                .img-container { overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 10px; }
+                img, iframe { max-width: 100%; transition: transform 0.3s ease; }
+                iframe { width: 90vw; height: 90vh; border: none; }
+            </style>
+            <script>
+                function rotate(id) {
+                    const el = document.getElementById(id);
+                    let current = parseInt(el.getAttribute('data-rotation') || '0');
+                    current = (current + 90) % 360;
+                    el.style.transform = 'rotate(' + current + 'deg)';
+                    el.setAttribute('data-rotation', current);
+                }
+            </script>
+        </head>
+        <body>
+            ${images.map((img, idx) => {
+                const src = img.src || img; 
+                const isPdf = src.includes("application/pdf");
+                return `
+                <div class="label-card">
+                    <div class="header">
+                        <div class="page-num">Label ${idx + 1}</div>
+                        <button class="btn" onclick="rotate('media-${idx}')">Rotate &#x27F3;</buton>
+                    </div>
+                    <div class="img-container">
+                        ${isPdf ? 
+                            `<iframe id="media-${idx}" src="${src}"></iframe>` : 
+                            `<img id="media-${idx}" src="${src}" />`
+                        }
+                    </div>
+                </div>`;
+            }).join('')}
+        </body>
+        </html>
+    `;
+
+    // Encode as data URL
+    const dataUrl = `data:text/html;base64,${btoa(unescape(encodeURIComponent(htmlContent)))}`;
+    
+    await chrome.tabs.create({ url: dataUrl });
+}
+
+/**
+ * Helper to safely send a message to a tab. Returns true if successful, false otherwise.
+ * Used to determine if a tab has the content script active.
+ */
+async function sendToTabSafe(tabId, message) {
+    try {
+        const response = await chrome.tabs.sendMessage(tabId, message);
+        // Check if content script explicitly accepted the task
+        return response && response.success;
+    } catch (e) {
+        return false;
     }
 }
 
