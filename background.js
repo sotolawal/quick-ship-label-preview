@@ -54,7 +54,15 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
             }
         }
 
-        await processLabelContent(msg.text, tabId, "Clipboard", url);
+        // Attempt to decode if it looks like URL-encoded content (common when copying from Network tab)
+        let text = msg.text;
+        try {
+            if (text && text.includes("%")) {
+                text = decodeURIComponent(text);
+            }
+        } catch (e) { /* ignore */ }
+
+        await processLabelContent(text, tabId, "Clipboard", url);
     }
 });
 
@@ -405,10 +413,11 @@ async function openViewerTab(images) {
         <head>
             <title>Label Preview</title>
             <style>
-                body { font-family: sans-serif; background: #f5f5f5; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
+                @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+                body { font-family: "Inter", sans-serif; background: #eff3f6; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
                 .label-card { background: white; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; max-width: 95vw; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; }
                 .header { width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-                .page-num { color: #444; font-size: 18px; font-weight: bold; }
+                .page-num { color: #008aa9; font-size: 18px; font-weight: bold; }
                 .btn { background: #0d6da0; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
                 .btn:hover { background: #095c8a; }
                 .img-container { overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 10px; }

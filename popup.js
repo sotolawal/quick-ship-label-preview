@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     pauseBtn.id = "pause-btn";
     // Basic styling to match typical icon buttons
     pauseBtn.className = "icon-btn";
-    pauseBtn.style.marginRight = "8px";
+    pauseBtn.style.marginRight = "2px";
 
     // Insert before the search button
     if (toggleSearchBtn && toggleSearchBtn.parentNode) {
@@ -24,7 +24,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const pasteBtn = document.createElement("button");
     pasteBtn.id = "paste-btn";
     pasteBtn.className = "icon-btn";
-    pasteBtn.style.marginRight = "8px";
+    pasteBtn.style.marginRight = "2px";
     pasteBtn.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24" fill="#fff"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>`;
     pasteBtn.title = "Paste from Clipboard";
 
@@ -36,11 +36,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     pasteBtn.addEventListener("click", async () => {
         try {
             const text = await navigator.clipboard.readText();
-            if (!text) return;
+            if (!text) {
+                showErrorModal("Clipboard is empty or permission denied.");
+                return;
+            }
             pasteBtn.style.opacity = "0.5"; // Visual feedback
             chrome.runtime.sendMessage({ type: "analyzeText", text: text });
         } catch (err) {
             console.error("Clipboard read failed:", err);
+            showErrorModal(err.message || "Failed to read clipboard.");
         }
     });
 
@@ -84,6 +88,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             listContainer.innerHTML = '<div class="empty-state">Error loading history.</div>';
         }
     }
+
+    loadHistory();
 
     // --- Event Listeners ---
 
@@ -177,6 +183,38 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && modal.classList.contains("active")) {
             closeModal();
+        }
+    });
+
+    // --- Error Modal ---
+    const errorModal = document.getElementById("error-modal");
+    const errorModalBody = document.getElementById("error-modal-body");
+    const errorModalCloseBtn = document.getElementById("error-modal-close-btn");
+
+    function showErrorModal(msg) {
+        if (errorModalBody) errorModalBody.textContent = msg;
+        if (errorModal) errorModal.classList.add("active");
+    }
+
+    function closeErrorModal() {
+        if (errorModal) errorModal.classList.remove("active");
+    }
+
+    if (errorModalCloseBtn) {
+        errorModalCloseBtn.addEventListener("click", closeErrorModal);
+    }
+
+    if (errorModal) {
+        errorModal.addEventListener("click", (e) => {
+            if (e.target === errorModal) closeErrorModal();
+        });
+    }
+
+    // Close on Escape key (Updated)
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            if (modal.classList.contains("active")) closeModal();
+            if (errorModal && errorModal.classList.contains("active")) closeErrorModal();
         }
     });
 
@@ -320,10 +358,11 @@ document.addEventListener("DOMContentLoaded", async () => {
             <head>
                 <title>Label Preview (${items.length} items)</title>
                 <style>
-                    body { font-family: sans-serif; background: #f5f5f5; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
+                    @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+                    body { font-family: "Inter",sans-serif; background: #eff3f6; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
                     .label-card { background: white; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; max-width: 95vw; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; }
                     .header { width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-                    .page-num { color: #444; font-size: 18px; font-weight: bold; }
+                    .page-num { color: #008aa9; font-size: 18px; font-weight: bold; }
                     .btn { background: #0d6da0; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
                     .btn:hover { background: #095c8a; }
                     .img-container { overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 10px; }
@@ -343,32 +382,30 @@ document.addEventListener("DOMContentLoaded", async () => {
             <body>
                 ${items.map((item, idx) => {
                     let src = item.src || item;
-                    if (!src.startsWith("data:")) src = \`data:image/png;base64,\${src}\`;
+                    if (!src.startsWith("data:")) src = `data:image/png;base64,${src}`;
                     const isPdf = src.includes("application/pdf");
-                    return \`
+                    return `
                     <div class="label-card">
                         <div class="header">
-                            <div class="page-num">Label \${idx + 1}</div>
-                            <button class="btn" onclick="rotate('media-\${idx}')">Rotate ↻</button>
+                            <div class="page-num">Label ${idx + 1}</div>
+                            <button class="btn" onclick="rotate('media-${idx}')">Rotate &#x27F3</button>
                         </div>
                         <div class="img-container">
-                            \${isPdf ? 
-                                \`<iframe id="media-\${idx}" src="\${src}"></iframe>\` : 
-                                \`<img id="media-\${idx}" src="\${src}" />\`
+                            ${isPdf ? 
+                                `<iframe id="media-${idx}" src="${src}"></iframe>` : 
+                                `<img id="media-${idx}" src="${src}" />`
                             }
                         </div>
-                    </div>\`;
+                    </div>`;
                 }).join('')}
             </body>
             </html>
         `;
         
-        const blob = new Blob([htmlContent], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        chrome.tabs.create({ url }, () => setTimeout(() => URL.revokeObjectURL(url), 10000));
+        const dataUrl = `data:text/html;base64,${btoa(unescape(encodeURIComponent(htmlContent)))}`;
+        chrome.tabs.create({ url: dataUrl });
     }
 
-    loadHistory();
 
     // Listen for results from background (for clipboard actions)
     chrome.runtime.onMessage.addListener((msg) => {
@@ -379,6 +416,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 openInNewTab(msg.images);
             } else {
                 console.error(msg.error);
+                showErrorModal(msg.error || "Failed to process label.");
             }
         }
     });

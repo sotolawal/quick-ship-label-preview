@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Quick Ship Label Preview",
   "version": "1.0",
-  "permissions": ["storage", "scripting", "alarms", "contextMenus"],
+  "permissions": ["storage", "scripting", "alarms", "contextMenus", "clipboardRead"],
   "host_permissions": [
     "http://*/*",
     "https://*/*"
