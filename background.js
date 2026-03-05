@@ -7,6 +7,12 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.runtime.onInstalled.addListener(() => {
     console.log("Service worker installed (onInstalled)");
+    
+    chrome.contextMenus.create({
+        id: "qs-preview-label",
+        title: "Preview Label",
+        contexts: ["selection"]
+    });
 });
 
 // Keep the worker alive every 20 seconds
@@ -30,6 +36,16 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
 
         await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders);
         console.log("[Quick Ship] PackID message processed:", msg.packID);
+    } else if (msg.type === "analyzeText") {
+        // Handle clipboard content
+        await processLabelContent(msg.text, sender.tab.id, "Clipboard", sender.tab.url);
+    }
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    if (info.menuItemId === "qs-preview-label" && info.selectionText) {
+        // Handle context menu selection
+        await processLabelContent(info.selectionText, tab.id, "Selection", tab.url);
     }
 });
 
@@ -204,7 +220,31 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
 
         const fileContent = await fileResponse.text();
 
-        // Use helper from utils.js
+        // Delegate processing to shared function
+        await processLabelContent(fileContent, tabId, packID, baseUrl, signal);
+
+    } catch (err) {
+        if (signal.aborted || err.name === 'AbortError') {
+            console.log(`[Quick Ship] Request aborted for packID: ${packID}`);
+        } else {
+            console.error("Background processing error:", err);
+            sendError(err.message || "Unknown error occurred during processing.");
+        }
+    } finally {
+        // Cleanup: remove from activeRequests if it's still this controller
+        const active = activeRequests.get(tabId);
+        if (active && active.controller === controller) {
+            activeRequests.delete(tabId);
+        }
+    }
+}
+
+/**
+ * Shared logic to extract, convert, and display label data from raw text/xml/json.
+ */
+async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, signal = null) {
+    try {
+        // Use helper from utils.js to find base64 data
         const extracted = extractLabelData(fileContent);
         if (!extracted) {
             throw new Error("No recognized label image tag found in the XML response.");
@@ -256,7 +296,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                     method: "POST",
                     headers: labelaryHeaders,
                     body: zpl,
-                    signal
+                    signal: signal || undefined
                 });
 
                 if (labelaryResp.ok) {
@@ -286,33 +326,29 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
 
         // Save to History
         await saveToHistory({
-            packID: packID,
+            packID: historyLabel,
             website: website,
             timestamp: Date.now(),
             images: processedImages.map(img => img.src) // Store all images
         });
 
-        if (!signal.aborted) {
+        if (!signal || !signal.aborted) {
             chrome.tabs.sendMessage(tabId, {
                 type: "labelPreview",
                 success: true,
                 images: processedImages
             });
         }
-
     } catch (err) {
-        if (signal.aborted || err.name === 'AbortError') {
-            console.log(`[Quick Ship] Request aborted for packID: ${packID}`);
-        } else {
-            console.error("Background processing error:", err);
-            sendError(err.message || "Unknown error occurred during processing.");
-        }
-    } finally {
-        // Cleanup: remove from activeRequests if it's still this controller
-        const active = activeRequests.get(tabId);
-        if (active && active.controller === controller) {
-            activeRequests.delete(tabId);
-        }
+        // If signal exists and is aborted, suppress error
+        if (signal && (signal.aborted || err.name === 'AbortError')) return;
+        
+        // Send error to tab
+        chrome.tabs.sendMessage(tabId, {
+            type: "labelPreview",
+            success: false,
+            error: err.message || "Failed to process label data."
+        });
     }
 }
 
