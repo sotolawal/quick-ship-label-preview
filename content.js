@@ -375,7 +375,6 @@
 
             content.innerHTML = `
                 <div class="qs-info">
-                    <span class="qs-info-icon">ℹ️</span>
                     <div>${msg}</div>
                 </div>
             `;
@@ -438,24 +437,31 @@
 
     // Listen for responses from Background Script
     try {
-        chrome.runtime.onMessage.addListener((msg) => {
+        chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (msg.type === "startLoading") {
                 // Check if we can render UI
                 if (document.contentType && !["text/html", "application/xhtml+xml"].includes(document.contentType)) {
                     // Cannot render on XML/Text
-                    return Promise.resolve({ success: false, reason: "invalid_content_type" });
+                    sendResponse({ success: false, reason: "invalid_content_type" });
+                    return;
                 }
                 ui.showLoading();
-                return Promise.resolve({ success: true });
+                sendResponse({ success: true });
+                return;
             } else if (msg.type === "labelPreview") {
-                if (msg.success) {
-                    ui.showImage(msg.images);
-                } else if (msg.isNoData) {
-                    // Show informative message for empty clipboard/selection
-                    ui.showInfo(msg.error);
-                } else {
-                    console.error("[Quick Ship] Label Generation Error:", msg.error);
-                    ui.showError(msg.error || "Failed to generate label.");
+                try {
+                    if (msg.success) {
+                        ui.showImage(msg.images);
+                    } else if (msg.isNoData) {
+                        // Show informative message for empty clipboard/selection
+                        ui.showInfo(msg.error);
+                    } else {
+                        console.error("[Quick Ship] Label Generation Error:", msg.error);
+                        ui.showError(msg.error || "Failed to generate label.");
+                    }
+                } catch (e) {
+                    console.error("[Quick Ship] UI Error:", e);
+                    ui.showError("An error occurred while displaying the result.");
                 }
             }
         });

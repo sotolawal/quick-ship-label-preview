@@ -6,6 +6,13 @@ function isValidBase64(str) {
     if (!str || str.trim().length < 20) return false;
     // Fast check: if it contains XML tags, it's likely a false positive match
     if (/[<>]/.test(str)) return false; 
+    
+    // Heuristic: If it contains multiple spaces but no newlines, it's likely natural language text, not base64.
+    if (str.includes(" ") && !str.includes("\n") && !str.includes("\r")) {
+        const spaceCount = (str.match(/ /g) || []).length;
+        if (spaceCount > 2) return false;
+    }
+
     // Allow standard base64 characters and whitespace
     return /^[A-Za-z0-9+/=\s]+$/.test(str);
 }

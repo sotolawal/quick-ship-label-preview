@@ -278,7 +278,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         const extracted = extractLabelData(fileContent);
         if (!extracted) {
             if (historyLabel === "Clipboard" || historyLabel === "Selection") {
-                throw new Error("No valid label data found in the copied text.");
+                throw new Error("No valid data found in the copied text. Please check your highlight and try again.");
             }
             throw new Error("No recognized label image tag found in the XML response.");
         }
@@ -289,10 +289,21 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
 
         for (const base64 of dataList) {
             let isPdf = false;
+            let isPng = false;
+            let isJpg = false;
+            let isGif = false;
+
             try {
-                const decodedHeader = atob(base64.substring(0, 50));
-                if (decodedHeader.startsWith("%PDF")) {
-                    isPdf = true;
+                const b64Prefix = base64.trim().substring(0, 30);
+                if (b64Prefix.startsWith("JVBER")) isPdf = true;
+                else if (b64Prefix.startsWith("iVBORw0KGgo")) isPng = true;
+                else if (b64Prefix.startsWith("/9j/")) isJpg = true;
+                else if (b64Prefix.startsWith("R0lGODlh")) isGif = true;
+                else {
+                    const decodedHeader = atob(base64.substring(0, 50));
+                    if (decodedHeader.includes("%PDF")) {
+                        isPdf = true;
+                    }
                 }
             } catch (e) { /* ignore */ }
 
@@ -300,6 +311,21 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 processedImages.push({
                     src: `data:application/pdf;base64,${base64}`,
                     type: "application/pdf"
+                });
+            } else if (isPng) {
+                processedImages.push({
+                    src: `data:image/png;base64,${base64}`,
+                    type: "image/png"
+                });
+            } else if (isJpg) {
+                processedImages.push({
+                    src: `data:image/jpeg;base64,${base64}`,
+                    type: "image/jpeg"
+                });
+            } else if (isGif) {
+                processedImages.push({
+                    src: `data:image/gif;base64,${base64}`,
+                    type: "image/gif"
                 });
             } else {
                 // Assume ZPL
@@ -313,6 +339,13 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
 
                 zpl = zpl.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\0/g, "").trim();
                 if (!zpl) continue;
+                
+                // Verify if it's likely valid ZPL before hitting the Labelary API
+                // Most ZPL labels start with ^XA, but allow for some flexibility
+                if (!zpl.includes("^XA") && !zpl.includes("^xa")) {
+                    console.warn("Skipping Labelary request: Decoded data does not appear to be valid ZPL (missing ^XA command).", zpl.substring(0, 100));
+                    continue;
+                }
 
                 const labelaryHeaders = {
                     "Content-Type": "application/x-www-form-urlencoded",
@@ -346,6 +379,11 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         }
 
         if (processedImages.length === 0) {
+            // If we came from clipboard/selection and found "something" that turned out to be invalid,
+            // treat it as "No Data" rather than a processing error.
+             if (historyLabel === "Clipboard" || historyLabel === "Selection") {
+                 throw new Error("No valid label data found in the copied text. Please check your highlight and try again.");
+            }
             throw new Error("Failed to process any valid labels.");
         }
 
@@ -372,12 +410,13 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 images: processedImages
             };
 
+            if (baseUrl === "Popup") {
+                // If request came from Popup, always send back to runtime to resolve popup UI state
+                chrome.runtime.sendMessage(payload);
+            }
             if (tabId) {
                 chrome.tabs.sendMessage(tabId, payload);
-            } else if (baseUrl === "Popup") {
-                // If request came from Popup, send back to runtime
-                chrome.runtime.sendMessage(payload);
-            } else {
+            } else if (baseUrl !== "Popup") {
                 // If no target tab and not from Popup (e.g. XML page context menu), 
                 // open result in a new tab directly.
                 await openViewerTab(processedImages);
@@ -387,7 +426,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         // If signal exists and is aborted, suppress error
         if (signal && (signal.aborted || err.name === 'AbortError')) return;
         
-        const isNoData = err.message === "No valid label data found in the copied text.";
+        const isNoData = err.message === "No valid label data found in the copied text. Please check your highlight and try again." || err.message === "Error: No data found.";
 
         // Send error to tab
         const errorPayload = {
@@ -397,10 +436,11 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
             isNoData: isNoData
         };
 
+        if (baseUrl === "Popup") {
+            chrome.runtime.sendMessage(errorPayload);
+        }
         if (tabId) {
             chrome.tabs.sendMessage(tabId, errorPayload);
-        } else if (baseUrl === "Popup") {
-            chrome.runtime.sendMessage(errorPayload);
         }
     }
 }
