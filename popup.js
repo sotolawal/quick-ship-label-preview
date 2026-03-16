@@ -370,12 +370,39 @@ document.addEventListener("DOMContentLoaded", async () => {
                     iframe { width: 90vw; height: 90vh; border: none; }
                 </style>
                 <script>
-                    function rotate(id) {
-                        const el = document.getElementById(id);
+                    let clicks = {};
+                    let timers = {};
+                    let idleTimers = {};
+                    function rotate(mediaId, fanId) {
+                        const el = document.getElementById(mediaId);
                         let current = parseInt(el.getAttribute('data-rotation') || '0');
-                        current = (current + 90) % 360;
+                        current = (current + 90);
                         el.style.transform = 'rotate(' + current + 'deg)';
                         el.setAttribute('data-rotation', current);
+
+
+                        if (!clicks[mediaId]) clicks[mediaId] = 0;
+                        clicks[mediaId]++;
+                        
+                        if (timers[mediaId]) clearTimeout(timers[mediaId]);
+                        timers[mediaId] = setTimeout(() => {
+                            clicks[mediaId] = 0;
+                        }, 500);
+
+                        const fan = document.getElementById(fanId);
+                        if (fan) {
+                            if (clicks[mediaId] >= 4) {
+                                fan.style.opacity = '1';
+                            }
+                            if (fan.style.opacity === '1') {
+                                fan.style.transform = 'rotate(' + current + 'deg)';
+                            }
+
+                            if (idleTimers[mediaId]) clearTimeout(idleTimers[mediaId]);
+                            idleTimers[mediaId] = setTimeout(() => {
+                                fan.style.opacity = '0';
+                            }, 2000);
+                        }
                     }
                 </script>
             </head>
@@ -388,7 +415,10 @@ document.addEventListener("DOMContentLoaded", async () => {
                     <div class="label-card">
                         <div class="header">
                             <div class="page-num">Label ${idx + 1}</div>
-                            <button class="btn" onclick="rotate('media-${idx}')">Rotate &#x27F3</button>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <svg id="fan-${idx}" style="opacity: 0; transition: opacity 0.5s, transform 0.3s ease; width: 24px; height: 24px; color: #0d6da0;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/></svg>
+                                <button class="btn" onclick="rotate('media-${idx}', 'fan-${idx}')">Rotate &#x27F3</button>
+                            </div>
                         </div>
                         <div class="img-container">
                             ${isPdf ? 
