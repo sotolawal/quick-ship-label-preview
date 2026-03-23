@@ -1,6 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Quick Ship Label Preview",
+  "icons" : {
+    "16": "icons/q16.png",
+    "32": "icons/q128.png",
+    "64": "icons/q128.png",  
+    "48": "icons/q128.png",
+    "128": "icons/q128.png"
+  },
   "version": "1.0",
   "permissions": ["storage", "scripting", "alarms", "contextMenus", "clipboardRead"],
   "host_permissions": [
