@@ -468,7 +468,7 @@ async function openViewerTab(images) {
                 function rotate(id) {
                     const el = document.getElementById(id);
                     let current = parseInt(el.getAttribute('data-rotation') || '0');
-                    current = (current + 90) % 360;
+                    current = (current + 90);
                     el.style.transform = 'rotate(' + current + 'deg)';
                     el.setAttribute('data-rotation', current);
                 }
