@@ -356,6 +356,11 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     case "UPS": labelaryHeaders["X-Rotation"] = "180"; break;
                     case "Loomis": labelaryHeaders["X-Rotation"] = "90"; break;
                     case "Canpar": labelaryHeaders["X-Rotation"] = "180"; break;
+                    default: 
+                        if (base64.trim().startsWith("Cl5YQQ")) {
+                            labelaryHeaders["X-Rotation"] = "180";
+                        }
+                        break;
                 }
             
                 const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
