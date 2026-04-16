@@ -1,6 +1,4 @@
 (function() {
-    // We no longer return early if Active is set, to allow re-patching with new logic.
-    // However, we rely on stored original functions to avoid stacking.
     window.QuickShipInterceptorActive = true;
 
     try {
@@ -172,8 +170,6 @@ function safeProcessText(txt, url, headers) {
         };
 
         // Navigate to the specific field we need
-        // Support both { result: { shipmentNumber: ... } } and { shipmentNumber: ... }
-        // Also try PascalCase "ShipmentNumber" just in case
         let resultObj = json?.result || json;
         let packID = findKey(resultObj, "shipmentNumber");
 
@@ -192,7 +188,6 @@ function safeProcessText(txt, url, headers) {
             console.log("[Quick Ship] PackID found:", packID);
 
             // Determine the App Base URL
-            // If the URL is http://host/Instance/dist/#/..., we want http://host/Instance
             let appBase = window.location.origin;
             const path = window.location.pathname;
             if (path.toLowerCase().includes("/dist/")) {
@@ -217,8 +212,6 @@ function safeProcessText(txt, url, headers) {
                 }
             }));
         } else {
-             // Log if we expected something but didn't find it (helpful for debugging)
-             // Only log if we are fairly sure it's a shipment response
              console.log("[Quick Ship] Parsed JSON but PackID not found. Keys in result:", resultObj ? Object.keys(resultObj) : "null");
         }
     } catch (err) {
