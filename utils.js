@@ -1,19 +1,11 @@
-/**
- * Helper to validate if a string looks like base64 image data.
- * It prevents returning nested XML tags or empty strings.
- */
+/* Helper to validate if a string looks like base64 image data. It prevents returning nested XML tags or empty strings. */
 function isValidBase64(str) {
     if (!str || str.trim().length < 20) return false;
-    // Fast check: if it contains XML tags, it's likely a false positive match
     if (/[<>]/.test(str)) return false; 
-    
-    // Heuristic: If it contains multiple spaces but no newlines, it's likely natural language text, not base64.
     if (str.includes(" ") && !str.includes("\n") && !str.includes("\r")) {
         const spaceCount = (str.match(/ /g) || []).length;
         if (spaceCount > 2) return false;
     }
-
-    // Allow standard base64 characters and whitespace
     return /^[A-Za-z0-9+/=\s]+$/.test(str);
 }
 
@@ -21,7 +13,7 @@ function extractLabelData(content) {
     const results = [];
     let detectedFormat = null;
 
-    // 1. JSON Strategy
+    // JSON Strategy
     if (content && (content.trim().startsWith("{") || content.trim().startsWith("["))) {
         try {
             const json = JSON.parse(content);
@@ -77,7 +69,7 @@ function extractLabelData(content) {
         }
     }
 
-    // 2. DOMParser Strategy (Robust, Preferred)
+    // DOMParser Strategy 
     if (typeof DOMParser !== "undefined") {
         try {
             const parser = new DOMParser();
@@ -103,7 +95,7 @@ function extractLabelData(content) {
                     { selector: "bolBase64",        format: "TForce" },
                     { selector: "Base64LabelImage", format: "Endicia" },
                     
-                    // Generic (Last resort)
+                    // Generic 
                     { selector: "Image",            format: "FedExEndicia" },
                     { selector: "label",            format: "Loomis" },
                     { selector: "label",            format: "GenericLabel" },
@@ -114,8 +106,6 @@ function extractLabelData(content) {
                     const nodes = doc.querySelectorAll(selector);
                     for (const node of nodes) {
                         // Ensure the node is a leaf (text only) or CDATA, not containing other elements
-                        // Note: textContent recursively gets text. We want to avoid grabbing a parent's text.
-                        // Checking if it has element children helps.
                         if (node.children.length === 0) {
                             const content = node.textContent.trim();
                             if (isValidBase64(content)) {
@@ -131,7 +121,7 @@ function extractLabelData(content) {
         }
     }
 
-    // 2. Regex Fallback Strategy (Fragile but necessary for Service Workers/No-DOM envs)
+    // Regex Fallback Strategy 
     const regexStrategies = [
         // Complex/Nested paths
         { pattern: /<LabelImage>[\s\S]*?<Bytes>([\s\S]+?)<\/Bytes>[\s\S]*?<\/LabelImage>/i, format: "DHL" },
@@ -146,7 +136,7 @@ function extractLabelData(content) {
         { pattern: /<bolBase64>([\s\S]+?)<\/bolBase64>/i,                             format: "TForce" },
         { pattern: /<Base64LabelImage(?: [^>]*)?>([\s\S]+?)<\/Base64LabelImage>/i,    format: "Endicia" },
         
-        // Common tags (checked last)
+        // Common tags
         { pattern: /<Image>([\s\S]+?)<\/Image>/i,                                     format: "FedExEndicia" },
         { pattern: /<label>([\s\S]+?)<\/label>/i,                                     format: "Loomis" },
         { pattern: /<label>([\s\S]+?)<\/label>/i,                                     format: "GenericLabel" },
@@ -171,33 +161,24 @@ function extractLabelData(content) {
         }
     }
 
-    // 3. Raw Base64 Fallback Strategy
-    // If no specific format was detected, check if the entire content is a valid base64 string
+    // Raw Base64 Fallback Strategy
     if (results.length === 0) {
         const trimmed = content ? content.trim() : "";
         if (isValidBase64(trimmed)) {
             return { data: [trimmed], format: "RawBase64" };
         }
 
-        // 4. Loose Extraction Strategy (The "Crazy Copy" Handler)
-        // The user might have copied a large block of text (like a full XML dump or a page selection)
-        // that contains the base64 string but failed previous parsers (e.g. malformed XML).
-        // We strip whitespace and look for the longest contiguous block of base64 characters.
+        // Loose Extraction Strategy 
         const cleanContent = (content || "").replace(/\s/g, "");
-        
-        // Find sequences of valid base64 characters (A-Z, a-z, 0-9, +, /, =)
-        // We enforce a minimum length (e.g., 100) to avoid false positives from regular text.
+    
         const candidates = cleanContent.match(/[A-Za-z0-9+/=]{100,}/g);
 
         if (candidates) {
-            // Sort by length, descending (assume the label is the biggest blob)
             candidates.sort((a, b) => b.length - a.length);
 
             for (let candidate of candidates) {
-                // Truncate after padding if present to handle "Data==Garbage"
                 const paddingIndex = candidate.indexOf("=");
                 if (paddingIndex !== -1) {
-                    // Check for double padding "=="
                     const end = candidate[paddingIndex + 1] === "=" ? paddingIndex + 2 : paddingIndex + 1;
                     candidate = candidate.substring(0, end);
                 }
@@ -205,7 +186,7 @@ function extractLabelData(content) {
                 if (isValidBase64(candidate)) {
                     results.push(candidate);
                     if (!detectedFormat) detectedFormat = "ScrubbedBase64";
-                    break; // Found the likely candidate
+                    break; 
                 }
             }
         }
@@ -226,6 +207,6 @@ function blobToBase64(blob) {
 }
 
 self.extractLabelData = extractLabelData;
-// Keep old alias for compatibility if needed
+// Old alias for compatibility if needed
 // self.extractGraphicImage = extractLabelData; 
 self.blobToBase64 = blobToBase64;

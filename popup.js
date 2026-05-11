@@ -49,7 +49,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     function updatePauseUI(isPaused) {
-        // Icons: Pause (Standard Grey) / Play (Blue to indicate action needed to resume)
         const pauseIcon = `<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24" fill="#fff"><path d="M560-200v-560h160v560H560Zm-320 0v-560h160v560H240Z"/></svg>`;
         const playIcon = `<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24" fill="#fff"><path d="M320-200v-560l440 280-440 280Z"/></svg>`;
         
@@ -351,7 +350,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     function openInNewTab(items) {
         if (!items || items.length === 0) return;
 
-        // Construct HTML for the viewer (Unified for single/multiple to support rotation)
         const htmlContent = `
             <!DOCTYPE html>
             <html>
@@ -436,8 +434,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         chrome.tabs.create({ url: dataUrl });
     }
 
-
-    // Listen for results from background (for clipboard actions)
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === "labelPreview") {
             pasteBtn.style.opacity = "1";
@@ -451,7 +447,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     });
 
-    // Listen for storage changes to update history list (e.g. when background processes a label on the page)
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area === "local" && changes.labelHistory) {
             loadHistory();

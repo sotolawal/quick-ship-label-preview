@@ -1,6 +1,5 @@
 (function () {
     // Orphaned Script Detection
-    // If the extension context is invalid (e.g., after extension reload), stop execution.
     try {
         if (!chrome.runtime || !chrome.runtime.id) {
             return;
@@ -43,7 +42,7 @@
         }
 
         ensureHost() {
-            // Prevent injection into non-HTML documents (XML, Text, etc.) to avoid corrupting the file view
+            // Prevent injection into non-HTML documents
             if (document.contentType && !["text/html", "application/xhtml+xml"].includes(document.contentType)) {
                 // console.warn("[Quick Ship] Overlay disabled on non-HTML document.");
                 return null;

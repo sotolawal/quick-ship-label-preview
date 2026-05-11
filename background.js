@@ -70,9 +70,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "qs-preview-label" && info.selectionText) {
         // Handle context menu selection
         const canRender = await sendToTabSafe(tab.id, { type: "startLoading" });
-        
-        // If the tab cannot render (e.g. XML file), pass null for tabId so processLabelContent
-        // knows to fallback to opening a new tab.
         const targetTabId = canRender ? tab.id : null;
         
         await processLabelContent(info.selectionText, targetTabId, "Selection", tab.url);
@@ -82,10 +79,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 const activeRequests = new Map();
 
 async function handlePackID(packID, baseUrl, tabId, authHeaders) {
-    // Cancel any existing request for this tab
     if (activeRequests.has(tabId)) {
         const active = activeRequests.get(tabId);
-        // If the same packID is already being processed, ignore this duplicate request
         if (active.packID === packID && !active.controller.signal.aborted) {
             console.log(`[Quick Ship] Request for packID ${packID} already in progress. Ignoring duplicate.`);
             return;
@@ -100,7 +95,6 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     const signal = controller.signal;
 
     const sendError = (errMsg) => {
-        // Only send error if not aborted
         if (signal.aborted) return;
         chrome.tabs.sendMessage(tabId, {
             type: "labelPreview",
@@ -110,11 +104,10 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     };
 
     try {
-        // Cleanly construct URL using the dynamic base URL provided by the content script
         const cleanBase = baseUrl.replace(/\/$/, ""); 
         let targetUrl = null;
 
-        // Strategy 1: Attempt to resolve exact URL via API
+        // Resolve exact URL via API
         try {
             console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
             const fetchOptions = { headers: authHeaders || {}, signal };
@@ -269,9 +262,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     }
 }
 
-/**
- * Shared logic to extract, convert, and display label data from raw text/xml/json.
- */
+/* Shared logic to extract, convert, and display label data from raw text/xml/json. */
 async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, signal = null) {
     try {
         // Use helper from utils.js to find base64 data
@@ -384,8 +375,6 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         }
 
         if (processedImages.length === 0) {
-            // If we came from clipboard/selection and found "something" that turned out to be invalid,
-            // treat it as "No Data" rather than a processing error.
              if (historyLabel === "Clipboard" || historyLabel === "Selection") {
                  throw new Error("No valid label data found in the copied text. Please check your highlight and try again.");
             }
@@ -536,10 +525,7 @@ async function openViewerTab(images) {
     await chrome.tabs.create({ url: dataUrl });
 }
 
-/**
- * Helper to safely send a message to a tab. Returns true if successful, false otherwise.
- * Used to determine if a tab has the content script active.
- */
+/* Helper to safely send a message to a tab. Used to determine if a tab has the content script active */
 async function sendToTabSafe(tabId, message) {
     try {
         const response = await chrome.tabs.sendMessage(tabId, message);
@@ -555,7 +541,7 @@ async function saveToHistory(item) {
         const result = await chrome.storage.local.get("labelHistory");
         let history = result.labelHistory || [];
         
-        // Remove duplicates if any (based on packID)
+        // Remove duplicates
         history = history.filter(h => h.packID !== item.packID);
         
         // Add new item to the top
