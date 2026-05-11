@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Quick Ship Label Preview",
+  "description": "Preview shipping labels before printing, either while shipping or by copying.",
   "icons" : {
     "16": "icons/q16.png",
     "32": "icons/q128.png",
