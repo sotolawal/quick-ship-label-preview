@@ -363,21 +363,74 @@ document.addEventListener("DOMContentLoaded", async () => {
                     .page-num { color: #008aa9; font-size: 18px; font-weight: bold; }
                     .btn { background: #0d6da0; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
                     .btn:hover { background: #095c8a; }
-                    .img-container { overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 10px; }
-                    img, iframe { max-width: 100%; transition: transform 0.3s ease; }
+                    .img-container { overflow: visible; display: flex; justify-content: center; align-items: center; padding: 10px; box-sizing: content-box; transition: width 0.3s ease, height 0.3s ease; }
+                    img, iframe { max-width: 100%; transition: transform 0.3s ease; transform-origin: center center; }
                     iframe { width: 90vw; height: 90vh; border: none; }
                 </style>
                 <script>
                     let clicks = {};
                     let timers = {};
                     let idleTimers = {};
+
+                    function getMediaContainer(el) {
+                        return el ? el.closest('.img-container') : null;
+                    }
+
+                    function captureMediaSize(el) {
+                        if (!el || el.dataset.baseWidth) return;
+
+                        const rect = el.getBoundingClientRect();
+                        const width = rect.width || el.offsetWidth;
+                        const height = rect.height || el.offsetHeight;
+
+                        if (!width || !height) return;
+
+                        el.dataset.baseWidth = width;
+                        el.dataset.baseHeight = height;
+                        resizeMediaContainer(el);
+                    }
+
+                    function resizeMediaContainer(el) {
+                        const container = getMediaContainer(el);
+                        if (!container) return;
+
+                        const baseWidth = parseFloat(el.dataset.baseWidth) || el.offsetWidth;
+                        const baseHeight = parseFloat(el.dataset.baseHeight) || el.offsetHeight;
+                        const rotation = ((parseInt(el.getAttribute('data-rotation') || '0', 10) % 360) + 360) % 360;
+                        const isSideways = rotation === 90 || rotation === 270;
+
+                        container.style.width = (isSideways ? baseHeight : baseWidth) + 'px';
+                        container.style.height = (isSideways ? baseWidth : baseHeight) + 'px';
+                    }
+
+                    function initializeMediaSizing() {
+                        document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
+                            if (el.tagName.toLowerCase() === 'img' && !el.complete) {
+                                el.addEventListener('load', () => captureMediaSize(el), { once: true });
+                            } else {
+                                requestAnimationFrame(() => captureMediaSize(el));
+                            }
+                        });
+                    }
+
+                    window.addEventListener('load', initializeMediaSizing);
+                    window.addEventListener('resize', () => {
+                        document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
+                            delete el.dataset.baseWidth;
+                            delete el.dataset.baseHeight;
+                            captureMediaSize(el);
+                        });
+                    });
+
                     function rotate(mediaId, fanId) {
                         const el = document.getElementById(mediaId);
-                        let current = parseInt(el.getAttribute('data-rotation') || '0');
+                        captureMediaSize(el);
+
+                        let current = parseInt(el.getAttribute('data-rotation') || '0', 10);
                         current = (current + 90);
                         el.style.transform = 'rotate(' + current + 'deg)';
                         el.setAttribute('data-rotation', current);
-
+                        resizeMediaContainer(el);
 
                         if (!clicks[mediaId]) clicks[mediaId] = 0;
                         clicks[mediaId]++;
@@ -395,7 +448,6 @@ document.addEventListener("DOMContentLoaded", async () => {
                             if (fan.style.opacity === '1') {
                                 fan.style.transform = 'rotate(' + current + 'deg)';
                             }
-
                             if (idleTimers[mediaId]) clearTimeout(idleTimers[mediaId]);
                             idleTimers[mediaId] = setTimeout(() => {
                                 fan.style.opacity = '0';
