@@ -78,6 +78,22 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 const activeRequests = new Map();
 
+function getFileTime(file) {
+    const parsed = file && file.fileDate
+        ? new Date(file.fileDate).getTime()
+        : NaN;
+
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getMostRecent(files) {
+    if (!Array.isArray(files) || files.length === 0) {
+        return null;
+    }
+
+    return [...files].sort((a, b) => getFileTime(b) - getFileTime(a))[0];
+}
+
 async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     if (activeRequests.has(tabId)) {
         const active = activeRequests.get(tabId);
@@ -127,22 +143,41 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                         return;
                     }
 
-                    // Check if any of the packID matches indicate Loomis
-                    const isLoomis = packIdMatches.some(f => f.fileName.toLowerCase().includes("loomis"));
-                    const isCanadaPost = packIdMatches.some(f => f.fileName.toLowerCase().includes("canadapost"));
-                    const isAusPost = packIdMatches.some(f => f.fileName.toLowerCase().includes("auspost"));
+                    // Determine carrier from the most recent file for this packID.
+                    // Do not use .some(...) across all historical packID matches, because
+                    // the same packID can have older files from a previous carrier/method.
+                    const latestPackIdMatch = getMostRecent(packIdMatches);
+                    const latestPackIdFileName = latestPackIdMatch && latestPackIdMatch.fileName
+                        ? latestPackIdMatch.fileName.toLowerCase()
+                        : "";
+
+                    const isLoomis = latestPackIdFileName.includes("loomis");
+                    const isCanadaPost = latestPackIdFileName.includes("canadapost");
+                    const isAusPost = latestPackIdFileName.includes("auspost");
+
+                    console.log(`[Quick Ship] Most recent file for PackID ${packID}: ${latestPackIdMatch ? latestPackIdMatch.fileName : "none"}`);
 
                     if (isLoomis) {
-                        // Loomis Way: Find the v2rs file
-                        const loomisMatch = files.find(f => f.fileName && f.fileName.toLowerCase().includes("v2rs"));
+                        // Loomis Way: Find the most recent v2rs file
+                        const loomisMatches = files.filter(f =>
+                            f.fileName &&
+                            f.fileName.toLowerCase().includes("v2rs")
+                        );
+                        const loomisMatch = getMostRecent(loomisMatches);
                         if (loomisMatch) {
                             targetUrl = loomisMatch.url;
-                            console.log(`Detected Loomis carrier via PackID. Resolved URL: ${targetUrl}`);
+                            console.log(`Detected Loomis carrier via PackID. Resolved URL using most recent fileDate: ${targetUrl}`);
                         }
                     } else if (isCanadaPost) {
                         // Canada Post Way: Find artifact ID in the packID file, then find the artifact file
-                        let match = packIdMatches.find(f => f.fileName.toLowerCase().includes("createshipmentresponse"));
-                        if (!match) match = packIdMatches[0];
+                        const createShipmentMatches = packIdMatches.filter(f =>
+                            f.fileName &&
+                            f.fileName.toLowerCase().includes("createshipmentresponse")
+                        );
+
+                        let match = createShipmentMatches.length > 0
+                            ? getMostRecent(createShipmentMatches)
+                            : getMostRecent(packIdMatches);
 
                         if (match) {
                             try {
@@ -152,7 +187,12 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                                     const artifactMatch = cpText.match(/<artifact-id>(.*?)<\/artifact-id>/);
                                     if (artifactMatch && artifactMatch[1]) {
                                         const artifactID = artifactMatch[1];
-                                        const fileWithLabel = files.find(f => f.fileName.includes("getArtifactResponse") && f.fileName.includes(artifactID));
+                                        const artifactMatches = files.filter(f =>
+                                            f.fileName &&
+                                            f.fileName.includes("getArtifactResponse") &&
+                                            f.fileName.includes(artifactID)
+                                        );
+                                        const fileWithLabel = getMostRecent(artifactMatches);
                                         if (fileWithLabel) {
                                             targetUrl = fileWithLabel.url;
                                             console.log(`Detected Canada Post. Resolved URL via Artifact ID: ${targetUrl}`);
@@ -165,24 +205,33 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                         }
                     } else if (isAusPost) {
                         // Australia Post Way: Look for "Label Image" in the packID file content
-                        const ausMatch = packIdMatches.find(f => f.fileName && f.fileName.toLowerCase().includes("createlabelresponse"));
+                        const ausMatches = packIdMatches.filter(f =>
+                            f.fileName &&
+                            f.fileName.toLowerCase().includes("createlabelresponse")
+                        );
+                        const ausMatch = getMostRecent(ausMatches);
                         if (ausMatch) {
                             targetUrl = ausMatch.url;
                             console.log(`Detected Australia Post. Using packID file URL: ${targetUrl}`);
                         }
                     } else if (packIdMatches.length > 0) {
-                        // Standard Check: Use the matches found
-                        // Prioritize file containing "Reply" if multiple matches exist
-                        let match = packIdMatches.find(f => f.fileName.toLowerCase().includes("reply") || f.fileName.toLowerCase().includes("response"));
-                        
-                        // Fallback to the first match if no "Reply" file is found
-                        if (!match) {
-                            match = packIdMatches[0];
-                        }
+                        // Standard Check: Use the most recent matching file.
+                        // Prioritize files containing "Reply" or "Response" if multiple matches exist.
+                        const responseMatches = packIdMatches.filter(f =>
+                            f.fileName &&
+                            (
+                                f.fileName.toLowerCase().includes("reply") ||
+                                f.fileName.toLowerCase().includes("response")
+                            )
+                        );
+
+                        const match = responseMatches.length > 0
+                            ? getMostRecent(responseMatches)
+                            : getMostRecent(packIdMatches);
 
                         if (match && match.url) {
                             targetUrl = match.url;
-                            console.log(`Resolved XML URL via API: ${targetUrl}`);
+                            console.log(`Resolved XML URL via API using most recent fileDate: ${targetUrl}`);
                         }
                     }
                 }
@@ -454,20 +503,74 @@ async function openViewerTab(images) {
                 .page-num { color: #008aa9; font-size: 18px; font-weight: bold; }
                 .btn { background: #0d6da0; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
                 .btn:hover { background: #095c8a; }
-                .img-container { overflow: hidden; display: flex; justify-content: center; align-items: center; padding: 10px; }
-                img, iframe { max-width: 100%; transition: transform 0.3s ease; }
+                .img-container { overflow: visible; display: flex; justify-content: center; align-items: center; padding: 10px; box-sizing: content-box; transition: width 0.3s ease, height 0.3s ease; }
+                img, iframe { max-width: 100%; transition: transform 0.3s ease; transform-origin: center center; }
                 iframe { width: 90vw; height: 90vh; border: none; }
             </style>
             <script>
                 let clicks = {};
                 let timers = {};
                 let idleTimers = {};
+
+                function getMediaContainer(el) {
+                    return el ? el.closest('.img-container') : null;
+                }
+
+                function captureMediaSize(el) {
+                    if (!el || el.dataset.baseWidth) return;
+
+                    const rect = el.getBoundingClientRect();
+                    const width = rect.width || el.offsetWidth;
+                    const height = rect.height || el.offsetHeight;
+
+                    if (!width || !height) return;
+
+                    el.dataset.baseWidth = width;
+                    el.dataset.baseHeight = height;
+                    resizeMediaContainer(el);
+                }
+
+                function resizeMediaContainer(el) {
+                    const container = getMediaContainer(el);
+                    if (!container) return;
+
+                    const baseWidth = parseFloat(el.dataset.baseWidth) || el.offsetWidth;
+                    const baseHeight = parseFloat(el.dataset.baseHeight) || el.offsetHeight;
+                    const rotation = ((parseInt(el.getAttribute('data-rotation') || '0', 10) % 360) + 360) % 360;
+                    const isSideways = rotation === 90 || rotation === 270;
+
+                    container.style.width = (isSideways ? baseHeight : baseWidth) + 'px';
+                    container.style.height = (isSideways ? baseWidth : baseHeight) + 'px';
+                }
+
+                function initializeMediaSizing() {
+                    document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
+                        if (el.tagName.toLowerCase() === 'img' && !el.complete) {
+                            el.addEventListener('load', () => captureMediaSize(el), { once: true });
+                        } else {
+                            requestAnimationFrame(() => captureMediaSize(el));
+                        }
+                    });
+                }
+
+                window.addEventListener('load', initializeMediaSizing);
+                window.addEventListener('resize', () => {
+                    document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
+                        delete el.dataset.baseWidth;
+                        delete el.dataset.baseHeight;
+                        captureMediaSize(el);
+                    });
+                });
+
                 function rotate(mediaId, fanId) {
                         const el = document.getElementById(mediaId);
-                        let current = parseInt(el.getAttribute('data-rotation') || '0');
+                        captureMediaSize(el);
+
+                        let current = parseInt(el.getAttribute('data-rotation') || '0', 10);
                         current = (current + 90);
                         el.style.transform = 'rotate(' + current + 'deg)';
                         el.setAttribute('data-rotation', current);
+                        resizeMediaContainer(el);
 
                         if (!clicks[mediaId]) clicks[mediaId] = 0;
                         clicks[mediaId]++;
@@ -490,8 +593,8 @@ async function openViewerTab(images) {
                             idleTimers[mediaId] = setTimeout(() => {
                                 fan.style.opacity = '0';
                             }, 2000); 
+                        }
                 }
-            }
             </script>
         </head>
         <body>
