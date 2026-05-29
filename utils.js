@@ -21,6 +21,7 @@ function extractLabelData(content) {
             const jsonStrategies = [
                 { key: "LabelImage", format: "DHL" },
                 { key: "GraphicImage", format: "UPS" },
+                { key: "InternationalSignatureGraphicImage", format: "UPS" },
                 { key: "labelData", format: "EVRi" },
                 { key: "bolBase64", format: "TForce" },
                 { key: "Base64LabelImage", format: "Endicia" },
@@ -91,6 +92,7 @@ function extractLabelData(content) {
                     
                     // Unique Tags
                     { selector: "GraphicImage",     format: "UPS" },
+                    { selector: "InternationalSignatureGraphicImage", format: "UPS" },
                     { selector: "labelData",        format: "EVRi" },
                     { selector: "bolBase64",        format: "TForce" },
                     { selector: "Base64LabelImage", format: "Endicia" },
@@ -132,6 +134,7 @@ function extractLabelData(content) {
 
         // Specific unique tags
         { pattern: /<GraphicImage>([\s\S]+?)<\/GraphicImage>/i,                       format: "UPS" },
+        { pattern: /\<InternationalSignatureGraphicImage\>([\s\S]+?)\<\/InternationalSignatureGraphicImage\>/i, format: "UPS" },
         { pattern: /<labelData>([\s\S]+?)<\/labelData>/i,                             format: "EVRi" },
         { pattern: /<bolBase64>([\s\S]+?)<\/bolBase64>/i,                             format: "TForce" },
         { pattern: /<Base64LabelImage(?: [^>]*)?>([\s\S]+?)<\/Base64LabelImage>/i,    format: "Endicia" },
