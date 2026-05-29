@@ -10,7 +10,7 @@
     "128": "icons/q128.png"
   },
   "version": "1.0",
-  "permissions": ["storage", "scripting", "alarms", "contextMenus", "clipboardRead"],
+  "permissions": ["storage", "alarms", "contextMenus", "clipboardRead"],
   "host_permissions": [
     "http://*/*",
     "https://*/*"
