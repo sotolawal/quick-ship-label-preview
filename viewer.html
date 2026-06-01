@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document Preview</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+
+        :root {
+            --qs-blue: #0d6da0;
+            --qs-blue-hover: #095c8a;
+            --qs-bg: #eff3f6;
+            --qs-card: #ffffff;
+            --qs-border: #e6e9ed;
+            --qs-text: #1f2933;
+            --qs-muted: #64748b;
+            --qs-error: #c62828;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--qs-bg);
+            color: var(--qs-text);
+            margin: 0;
+            min-height: 100vh;
+        }
+
+        .viewer-shell {
+            width: min(1400px, 100%);
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .viewer-topbar {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            background: rgba(239, 243, 246, 0.92);
+            backdrop-filter: blur(10px);
+            padding: 12px 0 18px;
+            margin-bottom: 14px;
+        }
+
+        .viewer-title-group {
+            min-width: 0;
+        }
+
+        .viewer-title {
+            font-size: 22px;
+            font-weight: 700;
+            margin: 0;
+            color: var(--qs-blue);
+        }
+
+        .viewer-subtitle {
+            margin: 4px 0 0;
+            font-size: 13px;
+            color: var(--qs-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 70vw;
+        }
+
+        .viewer-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .btn {
+            background: var(--qs-blue);
+            color: #fff;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.2s, transform 0.1s;
+        }
+
+        .btn:hover {
+            background: var(--qs-blue-hover);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn.secondary {
+            background: #ffffff;
+            color: var(--qs-blue);
+            border: 1px solid #bad7e8;
+        }
+
+        .btn.secondary:hover {
+            background: #eef8fd;
+        }
+
+        .status-card,
+        .error-card {
+            background: var(--qs-card);
+            border: 1px solid var(--qs-border);
+            border-radius: 10px;
+            padding: 22px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .error-card {
+            color: var(--qs-error);
+        }
+
+        .labels-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 40px;
+        }
+
+
+        .label-card {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+
+
+        .label-header {
+            width: min(960px, 95vw);
+            background: var(--qs-card);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.10);
+            border: 1px solid var(--qs-border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            flex: 0 0 auto;
+        }
+
+
+        .media-card {
+            background: var(--qs-card);
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border-radius: 8px;
+            max-width: 95vw;
+            box-sizing: border-box;
+            border: 1px solid var(--qs-border);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: visible;
+        }
+
+        .media-shell {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: visible;
+        }
+
+
+
+        .page-num {
+            color: #008aa9;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .label-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .fan-icon {
+            opacity: 0;
+            transition: opacity 0.5s, transform 0.3s ease;
+            width: 24px;
+            height: 24px;
+            color: var(--qs-blue);
+        }
+
+        .img-container {
+            overflow: visible;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 10px;
+            box-sizing: content-box;
+            transition: width 0.3s ease, height 0.3s ease;
+            max-width: 95vw;
+            flex: 0 0 auto;
+        }
+
+        img,
+        iframe {
+            max-width: 100%;
+            transition: transform 0.3s ease;
+            transform-origin: center center;
+        }
+
+        iframe {
+            width: 90vw;
+            height: 86vh;
+            border: none;
+            background: #fff;
+        }
+
+        .metadata-pill {
+            display: inline-flex;
+            align-items: center;
+            max-width: 100%;
+            background: #e8f4fb;
+            color: var(--qs-blue);
+            border: 1px solid #c9e4f3;
+            border-radius: 8px;
+            padding: 4px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+
+        @media print {
+            body {
+                background: #fff;
+            }
+
+            .viewer-topbar,
+            .label-actions {
+                display: none !important;
+            }
+
+            .viewer-shell {
+                padding: 0;
+            }
+
+            .label-card,
+            .media-card {
+                box-shadow: none;
+                border: none;
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main class="viewer-shell">
+        <header class="viewer-topbar">
+            <div class="viewer-title-group">
+                <h1 class="viewer-title">Document Preview</h1>
+                <div id="metadata-pill" class="metadata-pill" hidden></div>
+            </div>
+            <div class="viewer-actions">
+                <button id="print-all-btn" class="btn secondary" type="button">Print</button>
+                <button id="close-btn" class="btn" type="button">Close</button>
+            </div>
+        </header>
+
+        <section id="status" class="status-card">Loading preview...</section>
+        <section id="viewer" class="labels-container" aria-live="polite"></section>
+    </main>
+
+    <script src="viewer.js"></script>
+</body>
+
+</html>

@@ -7,7 +7,7 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.runtime.onInstalled.addListener(() => {
     console.log("Service worker installed (onInstalled)");
-    
+
     chrome.contextMenus.create({
         id: "qs-preview-label",
         title: "Preview Label",
@@ -63,6 +63,16 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
         } catch (e) { /* ignore */ }
 
         await processLabelContent(text, tabId, "Clipboard", url);
+    } else if (msg.type === "openViewer") {
+        await openViewerTab(msg.images || [], msg.metadata || {});
+    } else if (msg.type === "previewP21PackingList") {
+        const tabId = sender.tab ? sender.tab.id : null;
+        await handleP21PackingListPreview({
+            shipmentLookupNumber: msg.shipmentNumber || msg.quickShipShipmentNumber || msg.erpNumber,
+            baseUrl: msg.baseUrl,
+            authHeaders: msg.authHeaders || {},
+            tabId
+        });
     }
 });
 
@@ -71,7 +81,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         // Handle context menu selection
         const canRender = await sendToTabSafe(tab.id, { type: "startLoading" });
         const targetTabId = canRender ? tab.id : null;
-        
+
         await processLabelContent(info.selectionText, targetTabId, "Selection", tab.url);
     }
 });
@@ -120,7 +130,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     };
 
     try {
-        const cleanBase = baseUrl.replace(/\/$/, ""); 
+        const cleanBase = baseUrl.replace(/\/$/, "");
         let targetUrl = null;
 
         // Resolve exact URL via API
@@ -130,7 +140,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`, fetchOptions);
             if (listResponse.ok) {
                 const responseData = await listResponse.json();
-                
+
                 // Handle nested result array: { result: [...] }
                 const files = (responseData && Array.isArray(responseData.result)) ? responseData.result : responseData;
 
@@ -263,8 +273,8 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
                         break;
                     }
                 } catch (e) { if (signal.aborted) throw e; }
-            } 
-            
+            }
+
             attempts++;
             if (attempts < maxAttempts) {
                 // Silent wait, abortable
@@ -322,7 +332,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
             }
             throw new Error("No recognized label image tag found in the XML response.");
         }
-        
+
         const { data: rawData, format } = extracted;
         const dataList = Array.isArray(rawData) ? rawData : [rawData];
         const processedImages = [];
@@ -379,7 +389,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
 
                 zpl = zpl.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\0/g, "").trim();
                 if (!zpl) continue;
-                
+
                 // Verify if it's likely valid ZPL before hitting the Labelary API
                 // Most ZPL labels start with ^XA, but allow for some flexibility
                 if (!zpl.includes("^XA") && !zpl.includes("^xa")) {
@@ -391,18 +401,18 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Accept": "image/png"
                 };
-                
-                switch(format) {
+
+                switch (format) {
                     case "UPS": labelaryHeaders["X-Rotation"] = "180"; break;
                     case "Loomis": labelaryHeaders["X-Rotation"] = "90"; break;
                     case "Canpar": labelaryHeaders["X-Rotation"] = "180"; break;
-                    default: 
+                    default:
                         if (base64.trim().startsWith("Cl5YQQ")) {
                             labelaryHeaders["X-Rotation"] = "180";
                         }
                         break;
                 }
-            
+
                 const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
                     method: "POST",
                     headers: labelaryHeaders,
@@ -424,8 +434,8 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         }
 
         if (processedImages.length === 0) {
-             if (historyLabel === "Clipboard" || historyLabel === "Selection") {
-                 throw new Error("No valid label data found in the copied text. Please check your highlight and try again.");
+            if (historyLabel === "Clipboard" || historyLabel === "Selection") {
+                throw new Error("No valid label data found in the copied text. Please check your highlight and try again.");
             }
             throw new Error("Failed to process any valid labels.");
         }
@@ -460,15 +470,17 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
             if (tabId) {
                 chrome.tabs.sendMessage(tabId, payload);
             } else if (baseUrl !== "Popup") {
-                // If no target tab and not from Popup (e.g. XML page context menu), 
-                // open result in a new tab directly.
-                await openViewerTab(processedImages);
+                await openViewerTab(processedImages, {
+                    packID: historyLabel,
+                    website,
+                    source: baseUrl
+                });
             }
         }
     } catch (err) {
         // If signal exists and is aborted, suppress error
         if (signal && (signal.aborted || err.name === 'AbortError')) return;
-        
+
         const isNoData = err.message === "No valid label data found in the copied text. Please check your highlight and try again." || err.message === "Error: No data found.";
 
         // Send error to tab
@@ -488,144 +500,506 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
     }
 }
 
-async function openViewerTab(images) {
-    // Construct HTML for the viewer
-    const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Label Preview</title>
-            <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
-                body { font-family: "Inter", sans-serif; background: #eff3f6; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
-                .label-card { background: white; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; max-width: 95vw; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; }
-                .header { width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-                .page-num { color: #008aa9; font-size: 18px; font-weight: bold; }
-                .btn { background: #0d6da0; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
-                .btn:hover { background: #095c8a; }
-                .img-container { overflow: visible; display: flex; justify-content: center; align-items: center; padding: 10px; box-sizing: content-box; transition: width 0.3s ease, height 0.3s ease; }
-                img, iframe { max-width: 100%; transition: transform 0.3s ease; transform-origin: center center; }
-                iframe { width: 90vw; height: 90vh; border: none; }
-            </style>
-            <script>
-                let clicks = {};
-                let timers = {};
-                let idleTimers = {};
+async function openViewerTab(images, metadata = {}) {
+    if (!Array.isArray(images) || images.length === 0) {
+        console.warn("[Quick Ship] Viewer open skipped: no images were provided.");
+        return;
+    }
 
-                function getMediaContainer(el) {
-                    return el ? el.closest('.img-container') : null;
-                }
+    const previewId = createPreviewId();
+    const storageKey = `preview:${previewId}`;
 
-                function captureMediaSize(el) {
-                    if (!el || el.dataset.baseWidth) return;
+    const previewPayload = {
+        createdAt: Date.now(),
+        metadata,
+        images
+    };
 
-                    const rect = el.getBoundingClientRect();
-                    const width = rect.width || el.offsetWidth;
-                    const height = rect.height || el.offsetHeight;
+    await chrome.storage.session.set({
+        [storageKey]: previewPayload
+    });
+    cleanupOldViewerPreviews().catch((err) => {
+        console.warn("[Quick Ship] Viewer preview cleanup failed:", err);
+    });
 
-                    if (!width || !height) return;
+    const viewerUrl = chrome.runtime.getURL(`viewer.html?id=${encodeURIComponent(previewId)}`);
+    await chrome.tabs.create({ url: viewerUrl });
+}
 
-                    el.dataset.baseWidth = width;
-                    el.dataset.baseHeight = height;
-                    resizeMediaContainer(el);
-                }
+function createPreviewId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
 
-                function resizeMediaContainer(el) {
-                    const container = getMediaContainer(el);
-                    if (!container) return;
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
-                    const baseWidth = parseFloat(el.dataset.baseWidth) || el.offsetWidth;
-                    const baseHeight = parseFloat(el.dataset.baseHeight) || el.offsetHeight;
-                    const rotation = ((parseInt(el.getAttribute('data-rotation') || '0', 10) % 360) + 360) % 360;
-                    const isSideways = rotation === 90 || rotation === 270;
+async function cleanupOldViewerPreviews(maxAgeMs = 60 * 60 * 1000) {
+    if (!chrome.storage || !chrome.storage.session) return;
 
-                    container.style.width = (isSideways ? baseHeight : baseWidth) + 'px';
-                    container.style.height = (isSideways ? baseWidth : baseHeight) + 'px';
-                }
+    const allSessionItems = await chrome.storage.session.get(null);
+    const now = Date.now();
+    const keysToRemove = [];
 
-                function initializeMediaSizing() {
-                    document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
-                        if (el.tagName.toLowerCase() === 'img' && !el.complete) {
-                            el.addEventListener('load', () => captureMediaSize(el), { once: true });
-                        } else {
-                            requestAnimationFrame(() => captureMediaSize(el));
-                        }
-                    });
-                }
+    for (const [key, value] of Object.entries(allSessionItems)) {
+        if (!key.startsWith("preview:")) continue;
 
-                window.addEventListener('load', initializeMediaSizing);
-                window.addEventListener('resize', () => {
-                    document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
-                        delete el.dataset.baseWidth;
-                        delete el.dataset.baseHeight;
-                        captureMediaSize(el);
-                    });
-                });
+        const createdAt = value && typeof value.createdAt === "number"
+            ? value.createdAt
+            : 0;
 
-                function rotate(mediaId, fanId) {
-                        const el = document.getElementById(mediaId);
-                        captureMediaSize(el);
+        if (!createdAt || now - createdAt > maxAgeMs) {
+            keysToRemove.push(key);
+        }
+    }
 
-                        let current = parseInt(el.getAttribute('data-rotation') || '0', 10);
-                        current = (current + 90);
-                        el.style.transform = 'rotate(' + current + 'deg)';
-                        el.setAttribute('data-rotation', current);
-                        resizeMediaContainer(el);
+    if (keysToRemove.length > 0) {
+        await chrome.storage.session.remove(keysToRemove);
+    }
+}
 
-                        if (!clicks[mediaId]) clicks[mediaId] = 0;
-                        clicks[mediaId]++;
-                        
-                        if (timers[mediaId]) clearTimeout(timers[mediaId]);
-                        timers[mediaId] = setTimeout(() => {
-                            clicks[mediaId] = 0;
-                        }, 500);
 
-                        const fan = document.getElementById(fanId);
-                        if (fan) {
-                            if (clicks[mediaId] >= 4) {
-                                fan.style.opacity = '1';
-                            }
-                            if (fan.style.opacity === '1') {
-                                fan.style.transform = 'rotate(' + current + 'deg)';
-                            }
+async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, authHeaders = {}, tabId }) {
+    const sendP21Error = (message, details = {}) => {
+        if (!tabId) return;
+        chrome.tabs.sendMessage(tabId, {
+            type: "p21PreviewResult",
+            success: false,
+            title: details.title || "Error",
+            category: details.category || "error",
+            error: message || "Failed to preview the P21 packing list."
+        });
+    };
 
-                            if (idleTimers[mediaId]) clearTimeout(idleTimers[mediaId]);
-                            idleTimers[mediaId] = setTimeout(() => {
-                                fan.style.opacity = '0';
-                            }, 2000); 
-                        }
-                }
-            </script>
-        </head>
-        <body>
-            ${images.map((img, idx) => {
-                const src = img.src || img; 
-                const isPdf = src.includes("application/pdf");
-                return `
-                <div class="label-card">
-                    <div class="header">
-                        <div class="page-num">Label ${idx + 1}</div>
-                         <div style="display: flex; align-items: center; gap: 10px;">
-                                <svg id="fan-${idx}" style="opacity: 0; transition: opacity 0.5s, transform 0.3s ease; width: 24px; height: 24px; color: #0d6da0;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/></svg>
-                                <button class="btn" onclick="rotate('media-${idx}', 'fan-${idx}')">Rotate &#x27F3</button>
-                            </div>
-                    </div>
-                    <div class="img-container">
-                        ${isPdf ? 
-                            `<iframe id="media-${idx}" src="${src}"></iframe>` : 
-                            `<img id="media-${idx}" src="${src}" />`
-                        }
-                    </div>
-                </div>`;
-            }).join('')}
-        </body>
-        </html>
-    `;
+    try {
+        if (!shipmentLookupNumber) {
+            throw new Error("Unable to determine a Quick Ship shipment number from this page.");
+        }
+        if (!baseUrl) {
+            throw new Error("Unable to determine the Quick Ship base URL for this shipment page.");
+        }
 
-    // Encode as data URL
-    const dataUrl = `data:text/html;base64,${btoa(unescape(encodeURIComponent(htmlContent)))}`;
-    
-    await chrome.tabs.create({ url: dataUrl });
+        const cleanBase = baseUrl.replace(/\/$/, "");
+        const shipmentInfo = await getShipmentInfoForP21(cleanBase, shipmentLookupNumber, authHeaders);
+
+        if (!shipmentInfo || !shipmentInfo.isP21) {
+            throw new Error("This shipment does not appear to be a P21 shipment, so no P21 packing list preview is available.");
+        }
+
+        const resolvedErpNumber = shipmentInfo.erpNumber;
+        const files = await getCarrierXmlFiles(cleanBase, authHeaders);
+        const resolved = await resolveP21PackingListFromCarrierXml(files, resolvedErpNumber);
+
+        if (!resolved.success) {
+            const error = new Error(resolved.error || "No document was available for preview.");
+            error.p21Category = resolved.category || "error";
+            error.p21Title = resolved.title || "P21 Packing List Error";
+            throw error;
+        }
+
+        await saveToHistory({
+            packID: `P21 Packing List ${shipmentLookupNumber}`,
+            website: cleanBase,
+            timestamp: Date.now(),
+            images: [
+                `data:${resolved.contentType || "application/pdf"};base64,${resolved.documentData}`
+            ],
+            metadata: {
+                source: "P21 Packing List",
+                erpNumber: resolvedErpNumber,
+                shipmentLookupNumber,
+                reqFile: resolved.reqFile ? resolved.reqFile.fileName : undefined,
+                resFile: resolved.resFile ? resolved.resFile.fileName : undefined
+            }
+        });
+
+        await openViewerTab([
+            {
+                base64: resolved.documentData,
+                type: resolved.contentType || "application/pdf"
+            }
+        ], {
+            source: "P21 Packing List",
+            erpNumber: resolvedErpNumber,
+            shipmentLookupNumber,
+            reqFile: resolved.reqFile ? resolved.reqFile.fileName : undefined,
+            resFile: resolved.resFile ? resolved.resFile.fileName : undefined
+        });
+
+        if (tabId) {
+            chrome.tabs.sendMessage(tabId, {
+                type: "p21PreviewResult",
+                success: true
+            });
+        }
+    } catch (err) {
+        console.error("[Quick Ship] P21 packing list preview failed:", err);
+        sendP21Error(err.message || "Failed to preview the P21 packing list.", {
+            title: err.p21Title,
+            category: err.p21Category
+        });
+    }
+}
+
+async function getShipmentInfoForP21(cleanBase, shipmentLookupNumber, authHeaders = {}) {
+    const cleanShipmentLookupNumber = String(shipmentLookupNumber || "").trim();
+    const resp = await fetch(`${cleanBase}/api/shipments/${cleanShipmentLookupNumber}`, {
+        headers: authHeaders || {}
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Unable to retrieve shipment details. Response Status: ${resp.status}.`);
+    }
+
+    const data = await resp.json();
+    const result = data && (data.result || data.Result || data);
+    const erpSystem = findCaseInsensitive(result, "erpSystem");
+    const resolvedErpNumber = findCaseInsensitive(result, "erpNumber");
+
+    if (!resolvedErpNumber) {
+        throw new Error(`No shipment found to originate from Prophet 21.`);
+    }
+
+    return {
+        isP21: String(erpSystem || "").toUpperCase() === "P21",
+        erpNumber: String(resolvedErpNumber || "").trim(),
+        shipmentLookupNumber: cleanShipmentLookupNumber,
+        raw: result
+    };
+}
+
+async function getCarrierXmlFiles(cleanBase, authHeaders = {}) {
+    const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`, {
+        headers: authHeaders || {}
+    });
+
+    if (!listResponse.ok) {
+        throw new Error(`Unable to retrieve CarrierXML files. ${listResponse.status}.`);
+    }
+
+    const responseData = await listResponse.json();
+    const files = responseData && Array.isArray(responseData.result)
+        ? responseData.result
+        : responseData;
+
+    if (!Array.isArray(files)) {
+        throw new Error("CarrierXMLs were not returned in the expected format.");
+    }
+
+    return files;
+}
+
+async function resolveP21PackingListFromCarrierXml(files, erpNumber) {
+    const reqFiles = files
+        .filter(file => getTransactionInfo(file && file.fileName)?.type === "REQ")
+        .sort((a, b) => getFileTime(b) - getFileTime(a));
+
+    for (const reqFile of reqFiles) {
+        let reqText = "";
+        try {
+            const reqResp = await fetch(reqFile.url);
+            if (!reqResp.ok) continue;
+            reqText = await reqResp.text();
+        } catch (err) {
+            console.warn("[Quick Ship] Failed to read P21 transaction request:", reqFile.fileName, err);
+            continue;
+        }
+
+        if (!requestContainsP21PickTicket(reqText, erpNumber)) {
+            continue;
+        }
+
+        const resFile = findBestMatchingTransactionResFile(reqFile, files);
+        if (!resFile) {
+            return {
+                success: false,
+                category: "not_ready",
+                title: "Error",
+                error: `Found a packing list request for pick ticket ${erpNumber}, but no matching response was found. If the shipment just processed, wait a moment and try again.`,
+                reqFile
+            };
+        }
+
+        const resResp = await fetch(resFile.url);
+        if (!resResp.ok) {
+            return {
+                success: false,
+                category: "technical",
+                title: "Error",
+                error: `Found matching response file, but it could not be opened. ${resResp.status}.`,
+                reqFile,
+                resFile
+            };
+        }
+
+        const resText = await resResp.text();
+        const extracted = extractP21DocumentData(resText, erpNumber);
+
+        if (extracted.documentData) {
+            return {
+                success: true,
+                documentData: extracted.documentData,
+                contentType: extracted.contentType || "application/pdf",
+                reqFile,
+                resFile
+            };
+        }
+
+        return {
+            success: false,
+            category: extracted.category || "p21_exception",
+            title: extracted.title || "Prophet 21 Error",
+            error: extracted.message || `A response was found for pick ticket ${erpNumber}, but no packing list document data was available.`,
+            reqFile,
+            resFile
+        };
+    }
+
+    return {
+        success: false,
+        category: "not_ready",
+        title: "Error",
+        error: `No transaction was found for pick ticket ${erpNumber}. This usually means the shipment has not been processed yet. Ship the order first, then try again.`
+    };
+}
+function requestContainsP21PickTicket(text, erpNumber) {
+    const target = String(erpNumber || "").trim();
+    if (!text || !target) return false;
+
+    try {
+        const json = JSON.parse(text);
+        let matched = false;
+        walkJson(json, (node) => {
+            if (matched || !node || typeof node !== "object") return;
+            const name = findCaseInsensitive(node, "Name");
+            const value = findCaseInsensitive(node, "Value");
+            if (String(name || "").toLowerCase() === "pick_ticket_no" && String(value || "").trim() === target) {
+                matched = true;
+            }
+        });
+        if (matched) return true;
+    } catch {
+        // Not JSON; continue to raw matching.
+    }
+
+    const compact = text.replace(/\s+/g, "");
+    return compact.includes("pick_ticket_no") && (
+        compact.includes(`\"Value\":\"${escapeForJsonLikeSearch(target)}\"`) ||
+        compact.includes(`\"Value\":${escapeForJsonLikeSearch(target)}`) ||
+        compact.includes(`<Name>pick_ticket_no</Name><Value>${escapeForXmlLikeSearch(target)}</Value>`)
+    );
+}
+
+function getTransactionInfo(fileName) {
+    const match = String(fileName || "").match(/transaction_(REQ|RES)_([0-9]+)/i);
+    if (!match) return null;
+    return {
+        type: match[1].toUpperCase(),
+        suffix: match[2]
+    };
+}
+
+function commonPrefixLength(a, b) {
+    const max = Math.min(String(a || "").length, String(b || "").length);
+    let i = 0;
+    while (i < max && a[i] === b[i]) i++;
+    return i;
+}
+
+function findBestMatchingTransactionResFile(reqFile, files) {
+    const MIN_TRANSACTION_PAIR_PREFIX = 10;
+    const reqInfo = getTransactionInfo(reqFile && reqFile.fileName);
+    if (!reqInfo || reqInfo.type !== "REQ") return null;
+
+    const candidates = files
+        .map(file => {
+            const info = getTransactionInfo(file && file.fileName);
+            if (!info || info.type !== "RES") return null;
+            return {
+                file,
+                prefixLength: commonPrefixLength(reqInfo.suffix, info.suffix),
+                timeDelta: getFileTime(file) - getFileTime(reqFile)
+            };
+        })
+        .filter(Boolean)
+        .filter(candidate => candidate.prefixLength >= MIN_TRANSACTION_PAIR_PREFIX)
+        .sort((a, b) => {
+            if (b.prefixLength !== a.prefixLength) return b.prefixLength - a.prefixLength;
+            const aAfter = a.timeDelta >= 0;
+            const bAfter = b.timeDelta >= 0;
+            if (aAfter !== bAfter) return aAfter ? -1 : 1;
+            return Math.abs(a.timeDelta) - Math.abs(b.timeDelta);
+        });
+
+    return candidates.length > 0 ? candidates[0].file : null;
+}
+
+function extractP21DocumentData(text, erpNumber = null) {
+    if (!text) return { documentData: null, contentType: null, message: null, title: null, category: null };
+
+    const json = parseJsonOrEmbeddedJson(text);
+    if (json) {
+        const docs = [];
+        const messageInfo = extractP21JsonMessageInfo(json, erpNumber);
+
+        walkJson(json, (node) => {
+            if (!node || typeof node !== "object") return;
+            const data = findCaseInsensitive(node, "DocumentData");
+            if (!data) return;
+            docs.push({
+                documentData: String(data).trim(),
+                contentType: findCaseInsensitive(node, "DocumentContentType") || "application/pdf"
+            });
+        });
+
+        const doc = docs.find(d => d.documentData);
+        if (doc) return { ...doc, message: messageInfo.detailMessage, title: messageInfo.title, category: messageInfo.category };
+        return {
+            documentData: null,
+            contentType: null,
+            message: messageInfo.detailMessage,
+            title: messageInfo.title,
+            category: messageInfo.category
+        };
+    }
+
+    const documentData = firstXmlValue(text, "DocumentData");
+    const contentType = firstXmlValue(text, "DocumentContentType") || "application/pdf";
+    const xmlMessages = [
+        firstXmlValue(text, "Message"),
+        ...extractAllXmlValues(text, "Messages")
+    ].filter(Boolean);
+    const messageInfo = buildP21MessageInfo(xmlMessages, erpNumber);
+
+    return {
+        documentData: documentData ? documentData.trim() : null,
+        contentType,
+        message: messageInfo.detailMessage,
+        title: messageInfo.title,
+        category: messageInfo.category
+    };
+}
+function parseJsonOrEmbeddedJson(text) {
+    if (!text) return null;
+    const trimmed = String(text).trim();
+    try {
+        return JSON.parse(trimmed);
+    } catch {
+        // Continue to embedded JSON extraction.
+    }
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return null;
+    try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+    } catch {
+        return null;
+    }
+}
+
+function extractP21JsonMessageInfo(json, erpNumber = null) {
+    const messages = [];
+    walkJson(json, (node) => {
+        if (!node || typeof node !== "object") return;
+        const directMessages = findCaseInsensitive(node, "Messages");
+        if (Array.isArray(directMessages)) {
+            for (const item of directMessages) {
+                if (typeof item === "string" && item.trim()) messages.push(item.trim());
+            }
+        }
+        const directMessage = findCaseInsensitive(node, "Message");
+        if (typeof directMessage === "string" && directMessage.trim()) messages.push(directMessage.trim());
+    });
+    return buildP21MessageInfo(messages, erpNumber);
+}
+
+function buildP21MessageInfo(messages, erpNumber = null) {
+    const uniqueMessages = [...new Set((messages || []).map(m => String(m || "").trim()).filter(Boolean))];
+    if (uniqueMessages.length === 0) {
+        return {
+            title: "Error",
+            category: "p21_exception",
+            detailMessage: erpNumber
+                ? `Data for ${erpNumber} was found, but no packing list was available for preview.`
+                : "Data was found, but no packing list was found to be previewed."
+        };
+    }
+
+    const friendly = getFriendlyP21Message(uniqueMessages[0]);
+    const pickTicketLine = erpNumber ? `\n\nPick Ticket: ${erpNumber}` : "";
+    const detailBlock = uniqueMessages.length > 1
+        ? `\n\nDetails:\n${uniqueMessages.join("\n")}`
+        : "";
+    return {
+        title: "P21 Returned an Exception",
+        category: "p21_exception",
+        detailMessage: `${friendly}${pickTicketLine}${detailBlock}`
+    };
+}
+
+function getFriendlyP21Message(message) {
+    const raw = String(message || "").trim();
+    if (!raw) return "P21 did not return a packing list document.";
+
+    const exceptionMatch = raw.match(/General Exception:\s*(.*?)(?:\s*DataElement:|$)/i);
+    if (exceptionMatch && exceptionMatch[1]) return exceptionMatch[1].trim();
+
+    const rowMessageMatch = raw.match(/row\s+\d+:\s*(.*?)(?:\s*DataElement:|$)/i);
+    if (rowMessageMatch && rowMessageMatch[1]) return rowMessageMatch[1].trim();
+
+    const dataElementIndex = raw.search(/\sDataElement:/i);
+    return dataElementIndex > 0 ? raw.slice(0, dataElementIndex).trim() : raw;
+}
+function walkJson(node, visit) {
+    visit(node);
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+        node.forEach(child => walkJson(child, visit));
+    } else {
+        Object.values(node).forEach(child => walkJson(child, visit));
+    }
+}
+
+function findCaseInsensitive(obj, key) {
+    if (!obj || typeof obj !== "object") return undefined;
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+    const found = Object.keys(obj).find(k => k.toLowerCase() === key.toLowerCase());
+    return found ? obj[found] : undefined;
+}
+
+function firstXmlValue(text, tagName) {
+    const values = extractAllXmlValues(text, tagName);
+    return values.length > 0 ? values[0] : null;
+}
+
+function extractAllXmlValues(text, tagName) {
+    const regex = new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "gi");
+    const values = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+        values.push(decodeXmlEntities(match[1].trim()));
+    }
+    return values;
+}
+
+function decodeXmlEntities(value) {
+    return String(value || "")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
+}
+
+function escapeForJsonLikeSearch(value) {
+    return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function escapeForXmlLikeSearch(value) {
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 }
 
 /* Helper to safely send a message to a tab. Used to determine if a tab has the content script active */
@@ -643,18 +1017,18 @@ async function saveToHistory(item) {
     try {
         const result = await chrome.storage.local.get("labelHistory");
         let history = result.labelHistory || [];
-        
+
         // Remove duplicates
         history = history.filter(h => h.packID !== item.packID);
-        
+
         // Add new item to the top
         history.unshift(item);
-        
+
         // Limit to last 20 items
         if (history.length > 20) {
             history = history.slice(0, 20);
         }
-        
+
         await chrome.storage.local.set({ labelHistory: history });
     } catch (e) {
         console.error("Failed to save history:", e);

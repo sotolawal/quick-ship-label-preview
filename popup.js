@@ -324,8 +324,12 @@ document.addEventListener("DOMContentLoaded", async () => {
             // Open Image
             el.addEventListener("click", (e) => {
                 if (e.target.closest(".delete-btn")) return;
-                // Support new 'images' array or fallback to old 'png' string
-                openInNewTab(item.images || (item.png ? [item.png] : []));
+                openInNewTab(item.images || (item.png ? [item.png] : []), {
+                    source: "history",
+                    packID: item.packID,
+                    website: item.website,
+                    timestamp: item.timestamp
+                });
             });
 
             // Delete Individual Item
@@ -347,151 +351,45 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
 
-    function openInNewTab(items) {
+    function openInNewTab(items, metadata = {}) {
+
         if (!items || items.length === 0) return;
 
-        const htmlContent = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Label Preview (${items.length} items)</title>
-                <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
-                    body { font-family: "Inter",sans-serif; background: #eff3f6; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 40px; }
-                    .label-card { background: white; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; max-width: 95vw; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; }
-                    .header { width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-                    .page-num { color: #008aa9; font-size: 18px; font-weight: bold; }
-                    .btn { background: #0d6da0; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
-                    .btn:hover { background: #095c8a; }
-                    .img-container { overflow: visible; display: flex; justify-content: center; align-items: center; padding: 10px; box-sizing: content-box; transition: width 0.3s ease, height 0.3s ease; }
-                    img, iframe { max-width: 100%; transition: transform 0.3s ease; transform-origin: center center; }
-                    iframe { width: 90vw; height: 90vh; border: none; }
-                </style>
-                <script>
-                    let clicks = {};
-                    let timers = {};
-                    let idleTimers = {};
+        const images = items.map(item => {
+            if (item && typeof item === "object") return item;
 
-                    function getMediaContainer(el) {
-                        return el ? el.closest('.img-container') : null;
-                    }
+            const value = String(item || "").trim();
+            if (!value) return null;
 
-                    function captureMediaSize(el) {
-                        if (!el || el.dataset.baseWidth) return;
+            return value.startsWith("data:")
+                ? value
+                : `data:image/png;base64,${value}`;
+        }).filter(Boolean);
 
-                        const rect = el.getBoundingClientRect();
-                        const width = rect.width || el.offsetWidth;
-                        const height = rect.height || el.offsetHeight;
+        if (images.length === 0) return;
 
-                        if (!width || !height) return;
-
-                        el.dataset.baseWidth = width;
-                        el.dataset.baseHeight = height;
-                        resizeMediaContainer(el);
-                    }
-
-                    function resizeMediaContainer(el) {
-                        const container = getMediaContainer(el);
-                        if (!container) return;
-
-                        const baseWidth = parseFloat(el.dataset.baseWidth) || el.offsetWidth;
-                        const baseHeight = parseFloat(el.dataset.baseHeight) || el.offsetHeight;
-                        const rotation = ((parseInt(el.getAttribute('data-rotation') || '0', 10) % 360) + 360) % 360;
-                        const isSideways = rotation === 90 || rotation === 270;
-
-                        container.style.width = (isSideways ? baseHeight : baseWidth) + 'px';
-                        container.style.height = (isSideways ? baseWidth : baseHeight) + 'px';
-                    }
-
-                    function initializeMediaSizing() {
-                        document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
-                            if (el.tagName.toLowerCase() === 'img' && !el.complete) {
-                                el.addEventListener('load', () => captureMediaSize(el), { once: true });
-                            } else {
-                                requestAnimationFrame(() => captureMediaSize(el));
-                            }
-                        });
-                    }
-
-                    window.addEventListener('load', initializeMediaSizing);
-                    window.addEventListener('resize', () => {
-                        document.querySelectorAll('img[id^="media-"], iframe[id^="media-"]').forEach((el) => {
-                            delete el.dataset.baseWidth;
-                            delete el.dataset.baseHeight;
-                            captureMediaSize(el);
-                        });
-                    });
-
-                    function rotate(mediaId, fanId) {
-                        const el = document.getElementById(mediaId);
-                        captureMediaSize(el);
-
-                        let current = parseInt(el.getAttribute('data-rotation') || '0', 10);
-                        current = (current + 90);
-                        el.style.transform = 'rotate(' + current + 'deg)';
-                        el.setAttribute('data-rotation', current);
-                        resizeMediaContainer(el);
-
-                        if (!clicks[mediaId]) clicks[mediaId] = 0;
-                        clicks[mediaId]++;
-                        
-                        if (timers[mediaId]) clearTimeout(timers[mediaId]);
-                        timers[mediaId] = setTimeout(() => {
-                            clicks[mediaId] = 0;
-                        }, 500);
-
-                        const fan = document.getElementById(fanId);
-                        if (fan) {
-                            if (clicks[mediaId] >= 4) {
-                                fan.style.opacity = '1';
-                            }
-                            if (fan.style.opacity === '1') {
-                                fan.style.transform = 'rotate(' + current + 'deg)';
-                            }
-                            if (idleTimers[mediaId]) clearTimeout(idleTimers[mediaId]);
-                            idleTimers[mediaId] = setTimeout(() => {
-                                fan.style.opacity = '0';
-                            }, 2000);
-                        }
-                    }
-                </script>
-            </head>
-            <body>
-                ${items.map((item, idx) => {
-                    let src = item.src || item;
-                    if (!src.startsWith("data:")) src = `data:image/png;base64,${src}`;
-                    const isPdf = src.includes("application/pdf");
-                    return `
-                    <div class="label-card">
-                        <div class="header">
-                            <div class="page-num">Label ${idx + 1}</div>
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <svg id="fan-${idx}" style="opacity: 0; transition: opacity 0.5s, transform 0.3s ease; width: 24px; height: 24px; color: #0d6da0;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/></svg>
-                                <button class="btn" onclick="rotate('media-${idx}', 'fan-${idx}')">Rotate &#x27F3</button>
-                            </div>
-                        </div>
-                        <div class="img-container">
-                            ${isPdf ? 
-                                `<iframe id="media-${idx}" src="${src}"></iframe>` : 
-                                `<img id="media-${idx}" src="${src}" />`
-                            }
-                        </div>
-                    </div>`;
-                }).join('')}
-            </body>
-            </html>
-        `;
-        
-        const dataUrl = `data:text/html;base64,${btoa(unescape(encodeURIComponent(htmlContent)))}`;
-        chrome.tabs.create({ url: dataUrl });
+        chrome.runtime.sendMessage({
+            type: "openViewer",
+            images,
+            metadata: {
+                source: "popup",
+                ...metadata
+            }
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error("[Quick Ship] Failed to open viewer:", chrome.runtime.lastError.message);
+                showErrorModal(chrome.runtime.lastError.message || "Failed to open viewer.");
+            }
+        });
     }
-
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === "labelPreview") {
             pasteBtn.style.opacity = "1";
             if (msg.success) {
                 loadHistory(); // Refresh list
-                openInNewTab(msg.images);
+                openInNewTab(msg.images, {
+                    source: "clipboard"
+                });
             } else {
                 console.error(msg.error);
                 showErrorModal(msg.error || "Failed to process label.");

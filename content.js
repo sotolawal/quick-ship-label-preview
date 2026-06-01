@@ -59,6 +59,120 @@
             return this.shadowRoot;
         }
 
+        makeP21FabDraggable(fab) {
+            if (!fab || fab.dataset.dragBound === "true") return;
+            fab.dataset.dragBound = "true";
+
+            const DRAG_THRESHOLD_PX = 8;
+            const storageKey = "qsP21FabPosition";
+            let isPointerDown = false;
+            let isDragging = false;
+            let startX = 0;
+            let startY = 0;
+            let startLeft = 0;
+            let startTop = 0;
+
+            try {
+                chrome.storage.local.get(storageKey).then((result) => {
+                    const saved = result && result[storageKey];
+                    if (!saved || typeof saved.left !== "number" || typeof saved.top !== "number") return;
+                    const restored = clampPosition(saved.left, saved.top);
+                    fab.style.left = `${restored.left}px`;
+                    fab.style.top = `${restored.top}px`;
+                    fab.style.right = "auto";
+                    fab.style.bottom = "auto";
+                });
+            } catch {
+                // Ignore storage restore failures.
+            }
+
+            function clampPosition(left, top) {
+                const rect = fab.getBoundingClientRect();
+                const margin = 8;
+                const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+                const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+                return {
+                    left: Math.min(Math.max(left, margin), maxLeft),
+                    top: Math.min(Math.max(top, margin), maxTop)
+                };
+            }
+
+            const savePosition = () => {
+                const rect = fab.getBoundingClientRect();
+                const position = {
+                    left: Math.round(rect.left),
+                    top: Math.round(rect.top)
+                };
+                try {
+                    chrome.storage.local.set({ [storageKey]: position });
+                } catch {
+                    // Ignore storage save failures.
+                }
+            };
+
+            const onPointerDown = (event) => {
+                // Only primary mouse/touch/pen input.
+                if (event.button !== undefined && event.button !== 0) return;
+                const rect = fab.getBoundingClientRect();
+                isPointerDown = true;
+                isDragging = false;
+                startX = event.clientX;
+                startY = event.clientY;
+                startLeft = rect.left;
+                startTop = rect.top;
+                fab.setPointerCapture?.(event.pointerId);
+            };
+
+            const onPointerMove = (event) => {
+                if (!isPointerDown) return;
+                const dx = event.clientX - startX;
+                const dy = event.clientY - startY;
+                const movedFarEnough = Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX;
+
+                if (!isDragging && !movedFarEnough) return;
+
+                if (!isDragging) {
+                    isDragging = true;
+                    fab.style.transition = "none";
+                }
+
+                const next = clampPosition(startLeft + dx, startTop + dy);
+                fab.style.left = `${next.left}px`;
+                fab.style.top = `${next.top}px`;
+                fab.style.right = "auto";
+                fab.style.bottom = "auto";
+            };
+
+            const onPointerUp = (event) => {
+                if (!isPointerDown) return;
+                const wasDragging = isDragging;
+                isPointerDown = false;
+                isDragging = false;
+                fab.releasePointerCapture?.(event.pointerId);
+                fab.style.transition = "";
+
+                if (wasDragging) {
+                    savePosition();
+                    fab.dataset.suppressNextClick = "true";
+                    setTimeout(() => {
+                        delete fab.dataset.suppressNextClick;
+                    }, 250);
+                }
+            };
+
+            fab.addEventListener("pointerdown", onPointerDown);
+            fab.addEventListener("pointermove", onPointerMove);
+            fab.addEventListener("pointerup", onPointerUp);
+            fab.addEventListener("pointercancel", onPointerUp);
+            fab.addEventListener("lostpointercapture", onPointerUp);
+            fab.addEventListener("click", (event) => {
+                if (fab.dataset.suppressNextClick === "true") {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    delete fab.dataset.suppressNextClick;
+                }
+            }, true);
+        }
         injectStyles() {
             const style = document.createElement("style");
             style.textContent = `
@@ -282,6 +396,135 @@
             };
         }
 
+        ensureP21FabHost() {
+            const fabHostId = "quick-ship-p21-fab-host";
+
+            if (document.contentType && !["text/html", "application/xhtml+xml"].includes(document.contentType)) {
+                return null;
+            }
+
+            let host = document.getElementById(fabHostId);
+            if (host && host.shadowRoot) return host.shadowRoot;
+
+            host = document.createElement("div");
+            host.id = fabHostId;
+            document.body.appendChild(host);
+
+            const shadow = host.attachShadow({ mode: "open" });
+            const style = document.createElement("style");
+            style.textContent = `
+                :host { all: initial; font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+                .qs-p21-fab {
+                    position: fixed; right: 24px; bottom: 24px; z-index: 2147483647;
+                    display: flex; align-items: center; gap: 8px; min-width: 172px;
+                    padding: 12px 16px; border: none; border-radius: 8px;
+                    background: #0d6da0; color: #fff; font-family: inherit; font-size: 13px; font-weight: 700;
+                    cursor: pointer; box-shadow: 0 10px 28px rgba(0,0,0,.24);
+                    transition: transform .18s ease, background .18s ease, opacity .18s ease;
+                    touch-action: none;
+                    user-select: none;
+                }
+                .qs-p21-fab:hover:not(:disabled) { background: #095c8a; transform: translateY(-1px); }
+                .qs-p21-fab:disabled { cursor: wait; opacity: .72; }
+                .qs-p21-fab-icon {
+                    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+                    background: rgba(255,255,255,.18); border-radius: 3px; font-size: 12px;
+                }
+                .qs-p21-fab-error { background: #c62828 !important; }
+                .qs-p21-fab-ready { background: #2e7d32 !important; }
+                .qs-p21-fab-retry { background: #0d6da0 !important; cursor: pointer; opacity: 1; }
+                .qs-p21-toast {
+                    position: fixed; right: 24px; bottom: 82px; z-index: 2147483647;
+                    width: min(420px, calc(100vw - 48px)); background: #fff; color: #1f2933;
+                    border: 1px solid rgba(198,40,40,.22); border-left: 5px solid #c62828;
+                    border-radius: 0px; box-shadow: 0 14px 38px rgba(0,0,0,.24);
+                    padding: 14px 14px 12px; font-family: inherit;
+                    transform: translateY(8px); opacity: 0; pointer-events: none;
+                    transition: opacity .18s ease, transform .18s ease;
+                }
+                .qs-p21-toast-visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+                .qs-p21-toast-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+                .qs-p21-toast-title { font-size: 18px; font-weight: 800; color: #c62828; }
+                .qs-p21-toast-close { border: none; background: transparent; color: #64748b; cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 4px; }
+                .qs-p21-toast-message { font-size: 14px; line-height: 1.45; color: #334155; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; padding-bottom: 16px; }
+                .qs-p21-toast-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+                .qs-p21-toast-btn { border: 1px solid #bad7e8; background: #fff; color: #0d6da0; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
+                .qs-p21-toast-btn:hover { background: #eef8fd; }
+            `;
+            shadow.appendChild(style);
+            return shadow;
+        }
+
+        ensureP21Fab() {
+            const shadow = this.ensureP21FabHost();
+            if (!shadow) return null;
+
+            let fab = shadow.getElementById("qs-p21-fab");
+            if (fab) {
+                this.makeP21FabDraggable(fab);
+                return fab;
+            }
+
+            fab = document.createElement("button");
+            fab.id = "qs-p21-fab";
+            fab.className = "qs-p21-fab";
+            fab.type = "button";
+            fab.innerHTML = `<span class="qs-p21-fab-icon">P21</span><span id="qs-p21-fab-text">Check Packing List</span>`;
+            shadow.appendChild(fab);
+            this.makeP21FabDraggable(fab);
+            return fab;
+
+        }
+
+        setP21FabState(state, text) {
+            const fab = this.ensureP21Fab();
+            if (!fab) return null;
+
+            const label = fab.querySelector("#qs-p21-fab-text");
+            if (label) label.textContent = text || "Check Packing List";
+
+            fab.disabled = state === "loading";
+            fab.classList.remove("qs-p21-fab-error", "qs-p21-fab-ready", "qs-p21-fab-retry");
+            fab.classList.toggle("qs-p21-fab-error", state === "error" || state === "notReady");
+            fab.classList.toggle("qs-p21-fab-ready", state === "ready");
+            fab.classList.toggle("qs-p21-fab-retry", state === "retry" || state === "idle");
+            return fab;
+        }
+
+        showP21Toast(title, message, options = {}) {
+            const shadow = this.ensureP21FabHost();
+            if (!shadow) return;
+
+            let toast = shadow.getElementById("qs-p21-toast");
+            if (!toast) {
+                toast = document.createElement("div");
+                toast.id = "qs-p21-toast";
+                toast.className = "qs-p21-toast";
+                toast.innerHTML = `
+                    <div class="qs-p21-toast-header">
+                        <div class="qs-p21-toast-title" id="qs-p21-toast-title"></div>
+                        <button class="qs-p21-toast-close" id="qs-p21-toast-close" type="button" aria-label="Dismiss">&times;</button>
+                    </div>
+                    <div class="qs-p21-toast-message" id="qs-p21-toast-message"></div>
+                `;
+                shadow.appendChild(toast);
+                toast.querySelector("#qs-p21-toast-close").addEventListener("click", () => this.hideP21Toast());
+            }
+
+            toast.querySelector("#qs-p21-toast-title").textContent = title || "P21 Packing List Error";
+            toast.querySelector("#qs-p21-toast-message").textContent = message || "An unknown error occurred.";
+            toast.classList.add("qs-p21-toast-visible");
+
+            if (this.p21ToastTimer) clearTimeout(this.p21ToastTimer);
+            this.p21ToastTimer = setTimeout(() => this.hideP21Toast(), options.durationMs || 12000);
+        }
+
+        hideP21Toast() {
+            const host = document.getElementById("quick-ship-p21-fab-host");
+            const toast = host && host.shadowRoot ? host.shadowRoot.getElementById("qs-p21-toast") : null;
+            if (toast) toast.classList.remove("qs-p21-toast-visible");
+        }
+
         showLoading() {
             const root = this.renderBase();
             if (!root) return;
@@ -298,13 +541,13 @@
         showImage(images) {
             const content = this.shadowRoot.getElementById("qs-content");
             const status = this.shadowRoot.getElementById("qs-status");
-            
+
             if (!content) return; // UI was closed
 
             status.textContent = "Ready";
             status.style.backgroundColor = "#e8f5e9";
             status.style.color = "#2e7d32";
-            
+
             content.innerHTML = ""; // Clear previous
 
             if (!images || images.length === 0) return;
@@ -357,7 +600,7 @@
                 prevBtn.onclick = () => { if (currentIndex > 0) { currentIndex--; renderCurrent(); updateControls(); } };
                 nextBtn.onclick = () => { if (currentIndex < images.length - 1) { currentIndex++; renderCurrent(); updateControls(); } };
             }
-            
+
             renderCurrent();
             content.appendChild(wrapper);
         }
@@ -399,13 +642,113 @@
     }
 
     const ui = new LabelPreviewUI();
+    let latestShipmentContext = null;
+    let p21FabResetTimer = null;
+
+    function resetP21FabAfterDelay(delayMs = 3500) {
+        if (p21FabResetTimer) {
+            clearTimeout(p21FabResetTimer);
+        }
+
+        p21FabResetTimer = setTimeout(() => {
+            ui.setP21FabState("idle", "Check Packing List");
+            p21FabResetTimer = null;
+        }, delayMs);
+    }
+
+    function getLikelyErpNumberFromUrl() {
+        const matches = String(window.location.href || "").match(/\d+/g);
+        return matches && matches.length > 0 ? matches[matches.length - 1] : null;
+    }
+
+    function getLikelyBaseUrlFromLocation() {
+        let appBase = window.location.origin;
+        const path = window.location.pathname;
+        if (path.toLowerCase().includes("/dist/")) {
+            const splitIndex = path.toLowerCase().indexOf("/dist/");
+            appBase += path.substring(0, splitIndex);
+        }
+        return appBase;
+    }
+
+    async function requestP21PackingListPreview() {
+        ui.hideP21Toast();
+
+        const settings = await chrome.storage.local.get("isPaused");
+        if (settings.isPaused) {
+            ui.setP21FabState("retry", "Try Again");
+            ui.showP21Toast("Extension Paused", "Resume label generation to preview the P21 packing list.", { onRetry: requestP21PackingListPreview });
+            return;
+        }
+
+        const context = latestShipmentContext || {};
+        const shipmentNumber = context.shipmentNumber || context.packID || getLikelyErpNumberFromUrl();
+        const baseUrl = context.baseUrl || getLikelyBaseUrlFromLocation();
+
+        if (!shipmentNumber) {
+            ui.setP21FabState("retry", "Try Again");
+            ui.showP21Toast("Missing Shipment Number", "Unable to determine a Quick Ship shipment number from this page. Try refreshing the page, then click Try Again.", { onRetry: requestP21PackingListPreview });
+            return;
+        }
+
+        ui.setP21FabState("loading", "Checking...");
+
+        chrome.runtime.sendMessage({
+            type: "previewP21PackingList",
+            shipmentNumber,
+            erpNumber: context.erpNumber,
+            baseUrl,
+            authHeaders: context.authHeaders || {}
+        }, () => {
+            if (chrome.runtime.lastError) {
+                const message = chrome.runtime.lastError.message || "Failed to request P21 packing list preview.";
+                console.error("[Quick Ship] P21 FAB message failed:", message);
+                ui.setP21FabState("retry", "Try Again");
+                ui.showP21Toast("P21 Preview Request Failed", message, { onRetry: requestP21PackingListPreview });
+            }
+        });
+    }
+
+    function attachP21FabHandler() {
+        const fab = ui.setP21FabState("idle", "Check Packing List");
+        if (!fab || fab.dataset.bound === "true") return;
+        fab.dataset.bound = "true";
+        fab.addEventListener("click", requestP21PackingListPreview);
+    }
+    attachP21FabHandler();
 
     // Event Listeners
 
+    // Listen for shipment number for P21 Context
+    window.addEventListener("qs_shipment_context_found", (e) => {
+        const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber } = e.detail || {};
+        latestShipmentContext = {
+            packID,
+            shipmentNumber: shipmentNumber || packID,
+            baseUrl,
+            authHeaders,
+            erpSystem,
+            erpNumber: erpNumber || null
+        };
+        attachP21FabHandler();
+        console.log("[Quick Ship] Shipment context updated without preview workflow:", latestShipmentContext);
+    });
+
+
     // Listen for PackID detection from Injected Script
     window.addEventListener("label_packid_found", async (e) => {
-        const { packID, baseUrl, authHeaders } = e.detail;
-        
+        const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber } = e.detail;
+
+        latestShipmentContext = {
+            packID,
+            shipmentNumber: shipmentNumber || packID,
+            baseUrl,
+            authHeaders,
+            erpSystem,
+            erpNumber: erpNumber || null
+        };
+        attachP21FabHandler();
+
         // Check if extension is paused
         const settings = await chrome.storage.local.get("isPaused");
         if (settings.isPaused) {
@@ -447,6 +790,20 @@
                 ui.showLoading();
                 sendResponse({ success: true });
                 return;
+            } else if (msg.type === "p21PreviewResult") {
+                if (msg.success) {
+                    ui.hideP21Toast();
+                    ui.setP21FabState("ready", "Opened");
+                    setTimeout(() => ui.setP21FabState("idle", "Check Packing List"), 1800);
+                } else {
+                    const message = msg.error || "Failed to preview the P21 packing list.";
+                    const title = msg.title || "P21 Packing List Error";
+                    const state = msg.category === "not_ready" ? "notReady" : "retry";
+                    const buttonText = msg.category === "not_ready" ? "Error" : "Try Again";
+                    ui.setP21FabState(state, buttonText);
+                    resetP21FabAfterDelay(7500);
+                    ui.showP21Toast(title, message, { onRetry: requestP21PackingListPreview });
+                }
             } else if (msg.type === "labelPreview") {
                 try {
                     if (msg.success) {
