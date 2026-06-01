@@ -1,11 +1,17 @@
 Quick Ship Label Preview 
-Release version 1.0
+Release version 1.5
 
+What's New!
+Added Packing List preview for Quick Ship integrated with Prophet 21!
+Re-designed the preview tab.
+
+What This Does
 This extension allows you to easily and quickly preview labels as you ship in Quick Ship. 
 
 Supported Browsers
 Chrome, Microsoft Edge or any chromium based browser (Brave, Opera, Vivaldi, etc.)
 
+Steps to Setup
 Loading the extension
 1. Open chrome://extensions
 2. Enable Developer mode
@@ -30,6 +36,9 @@ What You Can Do
     1. Click on the extension icon
     2. Click on any saved label information
           *Only the 20 most recent labels are retained*
+- Preview P21 Packing Lists
+    1. Use the floating button to preview packing lists as they are made available.
+        *You can drag and move the button as you like*
 
 Supported Carriers
 - UPS
@@ -47,4 +56,4 @@ Supported Carriers
 Contact
 Got Questions? Ping me on Teams or shoot me an email at tolu.lawal@epicor.com
 
-Thank you for all that you do! It's my hope this tool makes work much more enjoyable. 
+Thank you for all that you do! It's my hope this tool makes our work that more enjoyable. 
