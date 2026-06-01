@@ -88,7 +88,7 @@
 
         if (pill) {
             pill.hidden = false;
-            pill.textContent = `${imageCount} document${imageCount === 1 ? "" : "s"}`;
+            pill.textContent = `${imageCount} item${imageCount === 1 ? "" : "s"}`;
         }
 
         document.title = imageCount > 1
@@ -222,7 +222,7 @@
 
         const pageNum = document.createElement("div");
         pageNum.className = "page-num";
-        pageNum.textContent = `Document ${idx + 1}`;
+        pageNum.textContent = `No. ${idx + 1}`;
 
         const actions = document.createElement("div");
         actions.className = "label-actions";
