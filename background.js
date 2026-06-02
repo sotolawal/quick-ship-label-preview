@@ -10,7 +10,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
     chrome.contextMenus.create({
         id: "qs-preview-label",
-        title: "Preview Label",
+        title: "Preview",
         contexts: ["selection"]
     });
 });
@@ -297,7 +297,7 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
             if (fileResponse && fileResponse.status === '') {
                 throw new Error("No data found for this carrier.");
             }
-            throw new Error(`Failed to preview label. ${fileResponse ? fileResponse.status : 'Error'}.`);
+            throw new Error(`Failed to preview. ${fileResponse ? fileResponse.status : 'Error'}.`);
         }
 
         const fileContent = await fileResponse.text();
@@ -807,7 +807,7 @@ function commonPrefixLength(a, b) {
 }
 
 function findBestMatchingTransactionResFile(reqFile, files) {
-    const MIN_TRANSACTION_PAIR_PREFIX = 10;
+    const MIN_TRANSACTION_PAIR_PREFIX = 9;
     const reqInfo = getTransactionInfo(reqFile && reqFile.fileName);
     if (!reqInfo || reqInfo.type !== "REQ") return null;
 

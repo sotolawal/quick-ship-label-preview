@@ -5,6 +5,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     const searchBar = document.getElementById("search-bar");
     const searchInput = document.getElementById("search-input");
     const searchClearIcon = document.getElementById("search-clear-icon");
+    const moreActionsBtn = document.getElementById("more-actions-btn");
+    const moreActionsMenu = document.getElementById("more-actions-menu");
+    const p21FabToggleBtn = document.getElementById("p21-fab-toggle-btn");
+    const p21FabStatus = document.getElementById("p21-fab-status");
+    const p21FabResetBtn = document.getElementById("p21-fab-reset-btn");
     
     let fullHistory = [];
 
@@ -76,6 +81,53 @@ document.addEventListener("DOMContentLoaded", async () => {
         };
     }
 
+
+    // --- P21 FAB Popup Controls ---
+    function closeMoreActionsMenu() {
+        if (!moreActionsMenu || !moreActionsBtn) return;
+        moreActionsMenu.classList.remove("active");
+        moreActionsBtn.setAttribute("aria-expanded", "false");
+    }
+    function toggleMoreActionsMenu() {
+        if (!moreActionsMenu || !moreActionsBtn) return;
+        const isActive = moreActionsMenu.classList.toggle("active");
+        moreActionsBtn.setAttribute("aria-expanded", String(isActive));
+    }
+    async function updateP21FabMenuUI() {
+        if (!p21FabToggleBtn) return;
+        const settings = await chrome.storage.local.get("p21FabHidden");
+        const hidden = Boolean(settings.p21FabHidden);
+        const label = p21FabToggleBtn.querySelector("span:first-child");
+        if (label) label.textContent = hidden ? "Show P21 Button" : "Hide P21 Button";
+        if (p21FabStatus) p21FabStatus.textContent = hidden ? "Hidden" : "Visible";
+    }
+    if (moreActionsBtn) {
+        moreActionsBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            toggleMoreActionsMenu();
+        });
+    }
+    document.addEventListener("click", (e) => {
+        if (!moreActionsMenu || !moreActionsBtn) return;
+        if (!moreActionsMenu.contains(e.target) && !moreActionsBtn.contains(e.target)) closeMoreActionsMenu();
+    });
+    if (p21FabToggleBtn) {
+        p21FabToggleBtn.addEventListener("click", async () => {
+            const settings = await chrome.storage.local.get("p21FabHidden");
+            await chrome.storage.local.set({ p21FabHidden: !settings.p21FabHidden });
+            await updateP21FabMenuUI();
+            closeMoreActionsMenu();
+        });
+    }
+    if (p21FabResetBtn) {
+        p21FabResetBtn.addEventListener("click", async () => {
+            await chrome.storage.local.remove("qsP21FabPosition");
+            await chrome.storage.local.set({ p21FabHidden: false });
+            await updateP21FabMenuUI();
+            closeMoreActionsMenu();
+        });
+    }
+    updateP21FabMenuUI();
     // --- Load History ---
     async function loadHistory() {
         try {
@@ -218,6 +270,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 
     deleteAllBtn.addEventListener("click", () => {
+        closeMoreActionsMenu();
         if (fullHistory.length === 0) return;
         modal.classList.add("active");
     });
@@ -400,6 +453,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area === "local" && changes.labelHistory) {
             loadHistory();
+        }
+        if (area === "local" && changes.p21FabHidden) {
+            updateP21FabMenuUI();
         }
     });
 });

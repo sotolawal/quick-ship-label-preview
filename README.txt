@@ -11,6 +11,7 @@ This extension allows you to easily and quickly preview labels as you ship in Qu
 Supported Browsers
 Chrome, Microsoft Edge or any chromium based browser (Brave, Opera, Vivaldi, etc.)
 
+
 Steps to Setup
 Loading the extension
 1. Open chrome://extensions
@@ -19,6 +20,7 @@ Loading the extension
 4. Select the `teams-meeting-extension` folder
 
 Using the extension
+IMPORTANT: You must enable the app setting GenerateXML in Quick Ship to use this extension.
 1. Click the extension icon in your browser.
 2. Pin the extension.
 3. Click on the extension, and ensure you see the play button.

@@ -59,14 +59,18 @@
             return this.shadowRoot;
         }
 
-        makeP21FabDraggable(fab) {
-            if (!fab || fab.dataset.dragBound === "true") return;
-            fab.dataset.dragBound = "true";
-
-            const DRAG_THRESHOLD_PX = 8;
+        makeP21FabDraggable(target) {
+            if (!target || target.dataset.dragBound === "true") return;
+            target.dataset.dragBound = "true";
+            const HOLD_TO_DRAG_MS = 180;
+            const DRAG_THRESHOLD_PX = 6;
             const storageKey = "qsP21FabPosition";
+
             let isPointerDown = false;
+            let isDragArmed = false;
             let isDragging = false;
+            let pointerStartedOnFab = false;
+            let holdTimer = null;
             let startX = 0;
             let startY = 0;
             let startLeft = 0;
@@ -77,17 +81,17 @@
                     const saved = result && result[storageKey];
                     if (!saved || typeof saved.left !== "number" || typeof saved.top !== "number") return;
                     const restored = clampPosition(saved.left, saved.top);
-                    fab.style.left = `${restored.left}px`;
-                    fab.style.top = `${restored.top}px`;
-                    fab.style.right = "auto";
-                    fab.style.bottom = "auto";
+                    target.style.left = `${restored.left}px`;
+                    target.style.top = `${restored.top}px`;
+                    target.style.right = "auto";
+                    target.style.bottom = "auto";
                 });
             } catch {
                 // Ignore storage restore failures.
             }
 
             function clampPosition(left, top) {
-                const rect = fab.getBoundingClientRect();
+                const rect = target.getBoundingClientRect();
                 const margin = 8;
                 const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
                 const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
@@ -98,7 +102,7 @@
             }
 
             const savePosition = () => {
-                const rect = fab.getBoundingClientRect();
+                const rect = target.getBoundingClientRect();
                 const position = {
                     left: Math.round(rect.left),
                     top: Math.round(rect.top)
@@ -110,69 +114,109 @@
                 }
             };
 
+            const clearHoldTimer = () => {
+                if (holdTimer) {
+                    clearTimeout(holdTimer);
+                    holdTimer = null;
+                }
+            };
+
+            const armDrag = () => {
+                if (!isPointerDown || isDragArmed) return;
+                isDragArmed = true;
+                target.style.transition = "none";
+                target.classList.add("qs-p21-fab-dragging");
+            };
+
             const onPointerDown = (event) => {
-                // Only primary mouse/touch/pen input.
+                if (event.target && event.target.closest && event.target.closest("#qs-p21-fab-close, #qs-p21-fab-close-zone")) return;
                 if (event.button !== undefined && event.button !== 0) return;
-                const rect = fab.getBoundingClientRect();
+
+                const rect = target.getBoundingClientRect();
                 isPointerDown = true;
+                isDragArmed = false;
                 isDragging = false;
+                pointerStartedOnFab = Boolean(event.target && event.target.closest && event.target.closest("#qs-p21-fab"));
                 startX = event.clientX;
                 startY = event.clientY;
                 startLeft = rect.left;
                 startTop = rect.top;
-                fab.setPointerCapture?.(event.pointerId);
+
+                target.setPointerCapture?.(event.pointerId);
+                clearHoldTimer();
+                holdTimer = setTimeout(armDrag, HOLD_TO_DRAG_MS);
             };
 
             const onPointerMove = (event) => {
                 if (!isPointerDown) return;
+
                 const dx = event.clientX - startX;
                 const dy = event.clientY - startY;
                 const movedFarEnough = Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX;
 
-                if (!isDragging && !movedFarEnough) return;
-
-                if (!isDragging) {
-                    isDragging = true;
-                    fab.style.transition = "none";
+                // Before drag is armed, movement should not move the FAB. A big early movement
+                // cancels activation so an accidental wiggle does not preview.
+                if (!isDragArmed) {
+                    if (movedFarEnough) pointerStartedOnFab = false;
+                    return;
                 }
+
+                if (movedFarEnough) isDragging = true;
 
                 const next = clampPosition(startLeft + dx, startTop + dy);
-                fab.style.left = `${next.left}px`;
-                fab.style.top = `${next.top}px`;
-                fab.style.right = "auto";
-                fab.style.bottom = "auto";
+                target.style.left = `${next.left}px`;
+                target.style.top = `${next.top}px`;
+                target.style.right = "auto";
+                target.style.bottom = "auto";
             };
 
-            const onPointerUp = (event) => {
+            const finishPointer = (event, wasCancelled = false) => {
                 if (!isPointerDown) return;
-                const wasDragging = isDragging;
-                isPointerDown = false;
-                isDragging = false;
-                fab.releasePointerCapture?.(event.pointerId);
-                fab.style.transition = "";
 
-                if (wasDragging) {
+                clearHoldTimer();
+
+                const shouldActivate = !wasCancelled && pointerStartedOnFab && !isDragArmed && !isDragging;
+                const shouldSavePosition = !wasCancelled && isDragArmed && isDragging;
+
+                isPointerDown = false;
+                pointerStartedOnFab = false;
+                target.releasePointerCapture?.(event.pointerId);
+                target.style.transition = "";
+                target.classList.remove("qs-p21-fab-dragging");
+
+                if (shouldSavePosition) {
                     savePosition();
-                    fab.dataset.suppressNextClick = "true";
+                    target.dataset.suppressNextClick = "true";
                     setTimeout(() => {
-                        delete fab.dataset.suppressNextClick;
+                        delete target.dataset.suppressNextClick;
                     }, 250);
+                } else if (shouldActivate) {
+                    target.dispatchEvent(new CustomEvent("qs-p21-fab-activate", {
+                        bubbles: true,
+                        composed: true
+                    }));
                 }
+
+                isDragArmed = false;
+                isDragging = false;
             };
 
-            fab.addEventListener("pointerdown", onPointerDown);
-            fab.addEventListener("pointermove", onPointerMove);
-            fab.addEventListener("pointerup", onPointerUp);
-            fab.addEventListener("pointercancel", onPointerUp);
-            fab.addEventListener("lostpointercapture", onPointerUp);
-            fab.addEventListener("click", (event) => {
-                if (fab.dataset.suppressNextClick === "true") {
+            target.addEventListener("pointerdown", onPointerDown);
+            target.addEventListener("pointermove", onPointerMove);
+            target.addEventListener("pointerup", (event) => finishPointer(event, false));
+            target.addEventListener("pointercancel", (event) => finishPointer(event, true));
+            target.addEventListener("lostpointercapture", (event) => finishPointer(event, true));
+
+            // Keep this as a safety net for the synthetic click generated after drag.
+            target.addEventListener("click", (event) => {
+                if (target.dataset.suppressNextClick === "true") {
                     event.preventDefault();
                     event.stopImmediatePropagation();
-                    delete fab.dataset.suppressNextClick;
+                    delete target.dataset.suppressNextClick;
                 }
             }, true);
         }
+
         injectStyles() {
             const style = document.createElement("style");
             style.textContent = `
@@ -398,7 +442,6 @@
 
         ensureP21FabHost() {
             const fabHostId = "quick-ship-p21-fab-host";
-
             if (document.contentType && !["text/html", "application/xhtml+xml"].includes(document.contentType)) {
                 return null;
             }
@@ -414,25 +457,76 @@
             const style = document.createElement("style");
             style.textContent = `
                 :host { all: initial; font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-                .qs-p21-fab {
-                    position: fixed; right: 24px; bottom: 24px; z-index: 2147483647;
-                    display: flex; align-items: center; gap: 8px; min-width: 172px;
-                    padding: 12px 16px; border: none; border-radius: 8px;
-                    background: #0d6da0; color: #fff; font-family: inherit; font-size: 13px; font-weight: 700;
-                    cursor: pointer; box-shadow: 0 10px 28px rgba(0,0,0,.24);
-                    transition: transform .18s ease, background .18s ease, opacity .18s ease;
+                .qs-p21-fab-shell {
+                    position: fixed;
+                    right: 24px;
+                    bottom: 24px;
+                    z-index: 2147483647;
+                    display: inline-flex;
+                    align-items: center;
+                    filter: drop-shadow(0 10px 28px rgba(0,0,0,.24));
                     touch-action: none;
                     user-select: none;
                 }
+
+                .qs-p21-fab {
+                    display: flex; align-items: center; gap: 8px; min-width: 172px;
+                    padding: 12px 16px; border: none; border-radius: 8px;
+                    background: #0d6da0; color: #fff; font-family: inherit; font-size: 13px; font-weight: 700;
+                    cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,.12);
+                    transition: transform .18s ease, background .18s ease, opacity .18s ease;
+                }
                 .qs-p21-fab:hover:not(:disabled) { background: #095c8a; transform: translateY(-1px); }
                 .qs-p21-fab:disabled { cursor: wait; opacity: .72; }
+
                 .qs-p21-fab-icon {
                     width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
                     background: rgba(255,255,255,.18); border-radius: 3px; font-size: 12px;
                 }
+                .qs-p21-fab-close-zone {
+                    position: absolute;
+                    top: -14px;
+                    right: -14px;
+                    width: 46px;
+                    height: 46px;
+                    display: flex;
+                    align-items: flex-start;
+                    justify-content: flex-end;
+                    pointer-events: auto;
+                }
+                .qs-p21-fab-close {
+                    width: 20px;
+                    height: 20px;
+                    border: 1px solid rgba(255,255,255,.65);
+                    border-radius: 999px;
+                    background: #c62828;
+                    color: #fff;
+                    cursor: pointer;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-family: inherit;
+                    font-size: 14px;
+                    font-weight: 800;
+                    line-height: 1;
+                    box-shadow: 0 3px 10px rgba(0,0,0,.28);
+                    opacity: 0;
+                    transform: scale(.85);
+                    pointer-events: none;
+                    transition: opacity .14s ease, transform .14s ease, background .14s ease;
+                }
+                .qs-p21-fab-close-zone:hover .qs-p21-fab-close,
+                .qs-p21-fab-close-zone:focus-within .qs-p21-fab-close {
+                    opacity: 1;
+                    transform: scale(1);
+                    pointer-events: auto;
+                }
+                .qs-p21-fab-close:hover { background: #a91f1f; }
+                .qs-p21-fab-close:focus-visible { opacity: 1; transform: scale(1); pointer-events: auto; outline: 2px solid #fff; outline-offset: 2px; }
                 .qs-p21-fab-error { background: #c62828 !important; }
                 .qs-p21-fab-ready { background: #2e7d32 !important; }
                 .qs-p21-fab-retry { background: #0d6da0 !important; cursor: pointer; opacity: 1; }
+
                 .qs-p21-toast {
                     position: fixed; right: 24px; bottom: 82px; z-index: 2147483647;
                     width: min(420px, calc(100vw - 48px)); background: #fff; color: #1f2933;
@@ -459,30 +553,60 @@
             const shadow = this.ensureP21FabHost();
             if (!shadow) return null;
 
+            let shell = shadow.getElementById("qs-p21-fab-shell");
             let fab = shadow.getElementById("qs-p21-fab");
-            if (fab) {
-                this.makeP21FabDraggable(fab);
+            if (shell && fab) {
+                this.makeP21FabDraggable(shell);
+                this.bindP21FabCloseHandler(shell);
                 return fab;
             }
 
-            fab = document.createElement("button");
-            fab.id = "qs-p21-fab";
-            fab.className = "qs-p21-fab";
-            fab.type = "button";
-            fab.innerHTML = `<span class="qs-p21-fab-icon">P21</span><span id="qs-p21-fab-text">Check Packing List</span>`;
-            shadow.appendChild(fab);
-            this.makeP21FabDraggable(fab);
-            return fab;
+            shell = document.createElement("div");
+            shell.id = "qs-p21-fab-shell";
+            shell.className = "qs-p21-fab-shell";
+            shell.innerHTML = `
+                <button id="qs-p21-fab" class="qs-p21-fab" type="button">
+                    <span class="qs-p21-fab-icon">P21</span>
+                    <span id="qs-p21-fab-text">Check Packing List</span>
+                </button>
+                <span id="qs-p21-fab-close-zone" class="qs-p21-fab-close-zone" aria-hidden="true">
+                    <button id="qs-p21-fab-close" class="qs-p21-fab-close" type="button" title="Hide P21 button" aria-label="Hide P21 button">&times;</button>
+                </span>
+            `;
+            shadow.appendChild(shell);
 
+            fab = shell.querySelector("#qs-p21-fab");
+            this.makeP21FabDraggable(shell);
+            this.bindP21FabCloseHandler(shell);
+            return fab;
+        }
+
+        bindP21FabCloseHandler(shell) {
+            if (!shell || shell.dataset.closeBound === "true") return;
+            shell.dataset.closeBound = "true";
+
+            const closeBtn = shell.querySelector("#qs-p21-fab-close");
+            if (!closeBtn) return;
+
+            closeBtn.addEventListener("click", async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+                await chrome.storage.local.set({ p21FabHidden: true });
+                this.removeP21Fab();
+            });
+        }
+
+        removeP21Fab() {
+            const host = document.getElementById("quick-ship-p21-fab-host");
+            if (host) host.remove();
         }
 
         setP21FabState(state, text) {
             const fab = this.ensureP21Fab();
             if (!fab) return null;
-
             const label = fab.querySelector("#qs-p21-fab-text");
             if (label) label.textContent = text || "Check Packing List";
-
             fab.disabled = state === "loading";
             fab.classList.remove("qs-p21-fab-error", "qs-p21-fab-ready", "qs-p21-fab-retry");
             fab.classList.toggle("qs-p21-fab-error", state === "error" || state === "notReady");
@@ -644,6 +768,7 @@
     const ui = new LabelPreviewUI();
     let latestShipmentContext = null;
     let p21FabResetTimer = null;
+    let p21FabHidden = false;
 
     function resetP21FabAfterDelay(delayMs = 3500) {
         if (p21FabResetTimer) {
@@ -677,7 +802,7 @@
         const settings = await chrome.storage.local.get("isPaused");
         if (settings.isPaused) {
             ui.setP21FabState("retry", "Try Again");
-            ui.showP21Toast("Extension Paused", "Resume label generation to preview the P21 packing list.", { onRetry: requestP21PackingListPreview });
+            ui.showP21Toast("Extension Paused", "Resume the extension to preview the P21 packing list.", { onRetry: requestP21PackingListPreview });
             return;
         }
 
@@ -710,12 +835,51 @@
     }
 
     function attachP21FabHandler() {
+        if (p21FabHidden) {
+            ui.removeP21Fab();
+            return;
+        }
+
         const fab = ui.setP21FabState("idle", "Check Packing List");
-        if (!fab || fab.dataset.bound === "true") return;
-        fab.dataset.bound = "true";
-        fab.addEventListener("click", requestP21PackingListPreview);
+        if (!fab) return;
+
+        const root = fab.getRootNode && fab.getRootNode();
+        const shell = root && root.getElementById ? root.getElementById("qs-p21-fab-shell") : null;
+        if (!shell || shell.dataset.actionBound === "true") return;
+
+        shell.dataset.actionBound = "true";
+        let lastActivationAt = 0;
+
+        const activateFab = (event) => {
+            if (event && event.target && event.target.closest && event.target.closest("#qs-p21-fab-close, #qs-p21-fab-close-zone")) {
+                return;
+            }
+
+            if (shell.dataset.suppressNextClick === "true") {
+                event?.preventDefault?.();
+                event?.stopImmediatePropagation?.();
+                delete shell.dataset.suppressNextClick;
+                return;
+            }
+
+            const now = Date.now();
+            if (now - lastActivationAt < 350) return;
+            lastActivationAt = now;
+
+            event?.preventDefault?.();
+            requestP21PackingListPreview();
+        };
+
+        // Primary activation path: generated by makeP21FabDraggable() after a short press/release.
+        shell.addEventListener("qs-p21-fab-activate", activateFab);
+
+        // Fallback/accessibility path: keyboard Enter/Space and any normal click that still fires.
+        fab.addEventListener("click", activateFab);
     }
-    attachP21FabHandler();
+    chrome.storage.local.get("p21FabHidden").then((settings) => {
+        p21FabHidden = Boolean(settings.p21FabHidden);
+        attachP21FabHandler();
+    });
 
     // Event Listeners
 
@@ -824,5 +988,21 @@
     } catch (err) {
         console.warn("[Quick Ship] Could not attach listener (context invalidated).");
     }
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== "local") return;
+        if (changes.p21FabHidden) {
+            p21FabHidden = Boolean(changes.p21FabHidden.newValue);
+            if (p21FabHidden) {
+                ui.removeP21Fab();
+            } else {
+                attachP21FabHandler();
+            }
+        }
+        if (changes.qsP21FabPosition && !p21FabHidden) {
+            ui.removeP21Fab();
+            attachP21FabHandler();
+        }
+    });
 
 })();

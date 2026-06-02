@@ -252,6 +252,24 @@
             background: #a8a8a8; 
         }
 
+
+        /* --- Overflow Menu --- */
+        .menu-wrapper { position: relative; }
+        .overflow-menu {
+            position: absolute; top: 38px; right: 0; min-width: 220px;
+            background: #fff; color: #1f2933; border: 1px solid #d8dee4; border-radius: 8px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.22); padding: 6px; display: none; z-index: 50;
+        }
+        .overflow-menu.active { display: block; }
+        .menu-item {
+            width: 100%; border: none; background: transparent; color: #1f2933; font-family: inherit;
+            font-size: 13px; text-align: left; padding: 9px 10px; border-radius: 6px; cursor: pointer;
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        }
+        .menu-item:hover { background: #eef8fd; color: #0d6da0; }
+        .menu-item.danger:hover { background: #fce8e6; color: #d93025; }
+        .menu-divider { height: 1px; background: #e5e7eb; margin: 6px 4px; }
+        .menu-status { font-size: 11px; color: #64748b; font-weight: 600; }
         /* --- Modal --- */
         .modal-overlay {
             position: fixed;
@@ -348,9 +366,19 @@
             <button id="toggle-search-btn" class="icon-btn" title="Search">
                 <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
             </button>
-            <button id="delete-all-btn" class="icon-btn" title="Clear All History">
-                <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-            </button>
+            <div class="menu-wrapper">
+                <button id="more-actions-btn" class="icon-btn" title="More actions" aria-haspopup="true" aria-expanded="false">
+                    <svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                </button>
+                <div id="more-actions-menu" class="overflow-menu" role="menu">
+                    <button id="p21-fab-toggle-btn" class="menu-item" type="button" role="menuitem">
+                        <span>Hide P21 Button</span><span id="p21-fab-status" class="menu-status">Visible</span>
+                    </button>
+                    <button id="p21-fab-reset-btn" class="menu-item" type="button" role="menuitem">Reset P21 Button Position</button>
+                    <div class="menu-divider"></div>
+                    <button id="delete-all-btn" class="menu-item danger" type="button" role="menuitem">Clear Recent Shipments</button>
+                </div>
+            </div>
         </div>
     </div>
 
