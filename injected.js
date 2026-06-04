@@ -25,6 +25,8 @@ function patchFetch() {
         const url = getFetchUrl(args);
         const method = getFetchMethod(args);
         const requestHeaders = getFetchRequestHeaders(args);
+        const requestBodyText = getFetchRequestBodyText(args);
+        safeProcessRequestText(requestBodyText, url, requestHeaders, method);
         // console.log("Processing fetch response for URL:", url);
         try {
             // Clone the response to read the body without consuming the original stream
@@ -69,6 +71,7 @@ function patchXHR() {
         return result;
     };
     XHR.send = function(...args) {
+        safeProcessRequestText(args && args.length ? args[0] : null, this._url, this._headers, this._method);
         // Use readystatechange for more reliable status/response capture
         this.addEventListener("readystatechange", () => {
             // Log every state change for debugging
@@ -114,6 +117,128 @@ function patchXHR() {
 }
 // console.log("Made it past XHR patch");
 
+
+function safeProcessRequestText(txt, url, headers, method = "GET") {
+    if (!txt || !url) return;
+    const urlText = String(url);
+    const requestMethod = String(method || "GET").toUpperCase();
+    if (!isKineticFreightCartonUrl(urlText, requestMethod)) return;
+
+    const bodyText = typeof txt === "string" ? txt : String(txt || "");
+    const trimmed = bodyText.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return;
+
+    try {
+        const json = JSON.parse(trimmed);
+        const context = getKineticLabelContextFromFreightCartonRequest(json, urlText);
+        if (!context || !context.packID || !context.quickShipBaseUrl) return;
+
+        window.dispatchEvent(new CustomEvent("qs_kinetic_label_context_found", {
+            detail: {
+                ...context,
+                baseUrl: context.quickShipBaseUrl,
+                kineticBaseUrl: getAppBaseUrl(),
+                kineticAuthHeaders: getAuthHeaders(headers),
+                sourceUrl: urlText,
+                contextSource: "kinetic-freight-carton"
+            }
+        }));
+        console.log("[Quick Ship] Kinetic label context found:", {
+            packID: context.packID,
+            quickShipBaseUrl: context.quickShipBaseUrl
+        });
+    } catch (err) {
+        console.warn("[Quick Ship] Kinetic FreightCarton request parse error:", err);
+    }
+}
+
+function isKineticFreightCartonUrl(url, method = "POST") {
+    if (String(method || "POST").toUpperCase() !== "POST") return false;
+    try {
+        const parsed = new URL(String(url), window.location.href);
+        return /\/Erp\.BO\.FreightServiceSvc\/FreightCarton\/?$/i.test(parsed.pathname);
+    } catch {
+        return /\/Erp\.BO\.FreightServiceSvc\/FreightCarton\/?(?:[?#].*)?$/i.test(String(url || ""));
+    }
+}
+
+function getKineticLabelContextFromFreightCartonRequest(body, sourceUrl) {
+    const freightURL = findCaseInsensitiveDeep(body, "freightURL");
+    const quickShipBaseUrl = getQuickShipBaseFromFreightUrl(freightURL);
+    const packID = getKineticPackIDFromFreightCartonBody(body);
+    if (!freightURL || !quickShipBaseUrl || !packID) return null;
+    return {
+        sourceSystem: "Kinetic",
+        documentType: "label",
+        packID,
+        kineticPackID: packID,
+        freightURL,
+        quickShipBaseUrl,
+        sourceUrl
+    };
+}
+
+function getQuickShipBaseFromFreightUrl(freightURL) {
+    if (!freightURL) return null;
+    try {
+        const parsed = new URL(String(freightURL));
+        const marker = "/EpicorFreightService.svc";
+        const markerIndex = parsed.pathname.toLowerCase().indexOf(marker.toLowerCase());
+        if (markerIndex >= 0) {
+            const basePath = parsed.pathname.slice(0, markerIndex).replace(/\/$/, "");
+            return `${parsed.origin}${basePath}`.replace(/\/$/, "");
+        }
+        return parsed.origin.replace(/\/$/, "");
+    } catch {
+        const match = String(freightURL).match(/^(https?:\/\/.+?)\/EpicorFreightService\.svc/i);
+        return match && match[1] ? match[1].replace(/\/$/, "") : null;
+    }
+}
+
+function getKineticPackIDFromFreightCartonBody(body) {
+    const rdt = body && body.rdt;
+    const candidates = [
+        rdt?.PackInfo?.[0]?.PackID,
+        rdt?.OrderInfo?.[0]?.PackID,
+        rdt?.OrderLine?.[0]?.PackID,
+        rdt?.COO?.[0]?.PackID,
+        rdt?.MasterPackInfo?.[0]?.PackID
+    ];
+    const found = candidates.find(value => {
+        const text = String(value ?? "").trim();
+        return text && text !== "0";
+    });
+    if (found != null) return String(found).trim();
+
+    const deepPackId = findCaseInsensitiveDeep(body, "PackID", value => {
+        const text = String(value ?? "").trim();
+        return text && text !== "0";
+    });
+    return deepPackId != null ? String(deepPackId).trim() : null;
+}
+
+function findCaseInsensitiveDeep(obj, key, predicate = null) {
+    let found;
+    walkAny(obj, (node) => {
+        if (found !== undefined || !node || typeof node !== "object") return;
+        const direct = findKey(node, key);
+        if (direct === undefined) return;
+        if (predicate && !predicate(direct)) return;
+        found = direct;
+    });
+    return found;
+}
+
+function walkAny(node, visit) {
+    visit(node);
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+        node.forEach(child => walkAny(child, visit));
+    } else {
+        Object.values(node).forEach(child => walkAny(child, visit));
+    }
+}
+
 function safeProcessText(txt, url, headers, method = "GET") {
     if (!txt || !url) {
         // console.log("[Quick Ship] Missing text or URL for processing");
@@ -124,8 +249,9 @@ function safeProcessText(txt, url, headers, method = "GET") {
     const requestMethod = String(method || "GET").toUpperCase();
     const isOriginalShipShipment = /ShipShipment/i.test(urlText);
     const isShipmentLookup = isDirectShipmentLookupUrl(urlText, requestMethod);
+    const isKineticGetByID = isKineticCustShipGetByIDUrl(urlText, requestMethod);
 
-    if (!isOriginalShipShipment && !isShipmentLookup) {
+    if (!isOriginalShipShipment && !isShipmentLookup && !isKineticGetByID) {
         return;
     }
 
@@ -136,6 +262,26 @@ function safeProcessText(txt, url, headers, method = "GET") {
 
     try {
         const json = JSON.parse(txt);
+
+        if (isKineticGetByID) {
+            const context = getKineticShipmentNumberFromCustShipGetByID(json, urlText);
+            if (context && context.shipmentNumber) {
+                window.dispatchEvent(new CustomEvent("qs_kinetic_mftransnum_found", {
+                    detail: {
+                        ...context,
+                        kineticBaseUrl: getAppBaseUrl(),
+                        kineticAuthHeaders: getAuthHeaders(headers),
+                        sourceUrl: urlText,
+                        contextSource: "kinetic-custship-getbyid"
+                    }
+                }));
+                console.log("[Quick Ship] Kinetic MFTransNum context found:", {
+                    kineticPackID: context.kineticPackID,
+                    shipmentNumber: context.shipmentNumber
+                });
+            }
+            return;
+        }
 
         if (isShipmentLookup && !isOriginalShipShipment) {
             const context = getShipmentContextFromShipmentApi(json, urlText);
@@ -158,7 +304,15 @@ function safeProcessText(txt, url, headers, method = "GET") {
         }
 
         // Original ShipShipment workflow retained.
+        const shipmentFailureInfo = getQuickShipFailureInfoFromResponse(json);
         const originalContext = getOriginalShipShipmentContext(json);
+        if (shipmentFailureInfo) {
+            console.warn("[Quick Ship] ShipShipment response indicated failure; background guard will block label preview.", {
+                severityType: shipmentFailureInfo.severityType,
+                message: shipmentFailureInfo.message,
+                errors: shipmentFailureInfo.errors
+            });
+        }
         if (originalContext && originalContext.packID) {
             console.log("[Quick Ship] PackID found:", originalContext.packID);
             window.dispatchEvent(new CustomEvent("label_packid_found", {
@@ -168,7 +322,8 @@ function safeProcessText(txt, url, headers, method = "GET") {
                     erpSystem: originalContext.erpSystem,
                     erpNumber: originalContext.erpNumber,
                     baseUrl: getAppBaseUrl(),
-                    authHeaders: getAuthHeaders(headers)
+                    authHeaders: getAuthHeaders(headers),
+                    shipmentFailure: shipmentFailureInfo || null
                 }
             }));
         } else {
@@ -177,6 +332,116 @@ function safeProcessText(txt, url, headers, method = "GET") {
     } catch (err) {
         console.warn("[Quick Ship] JSON parse error in safeProcessText:", err);
     }
+}
+
+
+function isKineticCustShipGetByIDUrl(url, method = "POST") {
+    if (String(method || "POST").toUpperCase() !== "POST") return false;
+    try {
+        const parsed = new URL(String(url), window.location.href);
+        return /\/Erp\.BO\.CustShipSvc\/GetByID\/?$/i.test(parsed.pathname);
+    } catch {
+        return /\/Erp\.BO\.CustShipSvc\/GetByID\/?(?:[?#].*)?$/i.test(String(url || ""));
+    }
+}
+
+function getKineticShipmentNumberFromCustShipGetByID(payload, sourceUrl) {
+    const resultObj = payload?.returnObj || payload?.ReturnObj || payload?.result?.returnObj || payload?.Result?.ReturnObj || payload;
+    const shipHead = resultObj && (resultObj.ShipHead || resultObj.shipHead);
+    const rows = Array.isArray(shipHead) ? shipHead : (shipHead ? [shipHead] : []);
+
+    let selected = rows.find(row => {
+        const mfTransNum = findKey(row, "MFTransNum");
+        return mfTransNum != null && String(mfTransNum).trim() !== "" && String(mfTransNum).trim() !== "0";
+    });
+
+    if (!selected && rows.length > 0) selected = rows[0];
+
+    let shipmentNumber = selected ? findKey(selected, "MFTransNum") : undefined;
+    let kineticPackID = selected ? findKey(selected, "PackNum") : undefined;
+
+    if (shipmentNumber == null || String(shipmentNumber).trim() === "" || String(shipmentNumber).trim() === "0") {
+        shipmentNumber = findCaseInsensitiveDeep(payload, "MFTransNum", value => {
+            const text = String(value ?? "").trim();
+            return text && text !== "0";
+        });
+    }
+    if (kineticPackID == null || String(kineticPackID).trim() === "" || String(kineticPackID).trim() === "0") {
+        kineticPackID = findCaseInsensitiveDeep(payload, "PackNum", value => {
+            const text = String(value ?? "").trim();
+            return text && text !== "0";
+        });
+    }
+
+    if (shipmentNumber == null || String(shipmentNumber).trim() === "" || String(shipmentNumber).trim() === "0") return null;
+
+    const cleanShipmentNumber = String(shipmentNumber).trim();
+    const cleanPackID = kineticPackID != null ? String(kineticPackID).trim() : null;
+
+    return {
+        sourceSystem: "Kinetic",
+        documentType: "label",
+        packID: cleanPackID,
+        kineticPackID: cleanPackID,
+        shipmentNumber: cleanShipmentNumber,
+        mfTransNum: cleanShipmentNumber,
+        sourceUrl
+    };
+}
+
+
+
+function isBenignShipmentMessage(message) {
+    const text = String(message || "").trim().toLowerCase();
+    if (!text) return true;
+    return /^(success|successful|ok|succeeded|completed)\b/.test(text);
+}
+
+function hasBlockingShipmentErrors(errorMessages = []) {
+    return (errorMessages || [])
+        .map(message => String(message || "").trim())
+        .filter(Boolean)
+        .some(message => !isBenignShipmentMessage(message));
+}
+
+function getBlockingShipmentErrorMessages(errorMessages = []) {
+    return (errorMessages || [])
+        .map(message => String(message || "").trim())
+        .filter(Boolean)
+        .filter(message => !isBenignShipmentMessage(message));
+}
+
+function getQuickShipFailureInfoFromResponse(json) {
+    if (!json || typeof json !== "object") return null;
+    const resultObj = unwrapResult(json);
+    const notification = resultObj && (findKey(resultObj, "notificationObject") || findKey(resultObj, "NotificationObject"));
+    const severityType = String(notification && (findKey(notification, "severityType") || findKey(notification, "SeverityType")) || "").trim().toUpperCase();
+    const notificationMessage = notification && (findKey(notification, "message") || findKey(notification, "Message"));
+    const errors = Array.isArray(json.errors) ? json.errors : Array.isArray(json.Errors) ? json.Errors : [];
+    const errorMessages = errors
+        .map(error => error && (error.message || error.Message))
+        .filter(Boolean);
+    const isSuccess = Object.prototype.hasOwnProperty.call(json, "isSuccess")
+        ? json.isSuccess
+        : Object.prototype.hasOwnProperty.call(json, "IsSuccess")
+            ? json.IsSuccess
+            : undefined;
+
+    const failureSeverityTypes = new Set(["ERROR", "ERR", "FATAL", "CRITICAL"]);
+    const hasFailureSeverity = failureSeverityTypes.has(severityType);
+    const hasExplicitFailure = isSuccess === false;
+    const blockingMessages = getBlockingShipmentErrorMessages(errorMessages);
+    const hasBlockingErrors = blockingMessages.length > 0;
+
+    // Some successful ShipShipment responses include errors: [{ message: "Success" }].
+    // Do not treat those as failures.
+    if (!hasFailureSeverity && !hasExplicitFailure && !hasBlockingErrors) return null;
+
+    return {
+        severityType: severityType || (hasExplicitFailure || hasBlockingErrors ? "ERROR" : "UNKNOWN"),
+        message: notificationMessage || blockingMessages.join("\n") || "Quick Ship returned a shipment failure.",
+        errors: errorMessages
+    };
 }
 
 function getOriginalShipShipmentContext(json) {
@@ -258,6 +523,14 @@ function getFetchMethod(args) {
     if (init && init.method) return init.method;
     if (input instanceof Request && input.method) return input.method;
     return "GET";
+}
+
+function getFetchRequestBodyText(args) {
+    const input = args && args[0];
+    const init = args && args[1];
+    if (init && typeof init.body === "string") return init.body;
+    // Do not attempt to read Request bodies here; reading could consume a one-shot stream.
+    return null;
 }
 
 function getFetchRequestHeaders(args) {

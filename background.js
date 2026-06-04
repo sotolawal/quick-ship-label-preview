@@ -34,7 +34,7 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
             return;
         }
 
-        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders);
+        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders, msg.shipmentFailure || null);
         console.log("[Quick Ship] PackID message processed:", msg.packID);
     } else if (msg.type === "analyzeText") {
         // Handle clipboard content
@@ -65,6 +65,18 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
         await processLabelContent(text, tabId, "Clipboard", url);
     } else if (msg.type === "openViewer") {
         await openViewerTab(msg.images || [], msg.metadata || {});
+    } else if (msg.type === "previewKineticLabel") {
+        const tabId = sender.tab ? sender.tab.id : null;
+        await handleKineticLabelPreview({
+            packID: msg.packID,
+            shipmentNumber: msg.shipmentNumber,
+            mfTransNum: msg.mfTransNum,
+            kineticPackID: msg.kineticPackID,
+            baseUrl: msg.baseUrl,
+            freightURL: msg.freightURL,
+            authHeaders: msg.authHeaders || {},
+            tabId
+        });
     } else if (msg.type === "previewP21PackingList") {
         const tabId = sender.tab ? sender.tab.id : null;
         await handleP21PackingListPreview({
@@ -104,7 +116,128 @@ function getMostRecent(files) {
     return [...files].sort((a, b) => getFileTime(b) - getFileTime(a))[0];
 }
 
-async function handlePackID(packID, baseUrl, tabId, authHeaders) {
+
+function normalizeShipmentApiResult(data) {
+    if (!data || typeof data !== "object") return { envelope: data || {}, shipment: null };
+    return { envelope: data, shipment: data.result || data.Result || data };
+}
+
+
+function isBenignShipmentMessage(message) {
+    const text = String(message || "").trim().toLowerCase();
+    if (!text) return true;
+    return /^(success|successful|ok|succeeded|completed)\b/.test(text);
+}
+
+function hasBlockingShipmentErrors(errorMessages = []) {
+    return (errorMessages || [])
+        .map(message => String(message || "").trim())
+        .filter(Boolean)
+        .some(message => !isBenignShipmentMessage(message));
+}
+
+function getBlockingShipmentErrorMessages(errorMessages = []) {
+    return (errorMessages || [])
+        .map(message => String(message || "").trim())
+        .filter(Boolean)
+        .filter(message => !isBenignShipmentMessage(message));
+}
+
+function getShipmentFailureInfo(data) {
+    const { envelope, shipment } = normalizeShipmentApiResult(data);
+    const notification = shipment && (shipment.notificationObject || shipment.NotificationObject);
+    const severity = String(notification && (notification.severityType || notification.SeverityType) || "").trim().toUpperCase();
+    const notificationMessage = notification && (notification.message || notification.Message);
+    const errors = Array.isArray(envelope && envelope.errors)
+        ? envelope.errors
+        : Array.isArray(envelope && envelope.Errors)
+            ? envelope.Errors
+            : [];
+    const errorMessages = errors
+        .map(error => error && (error.message || error.Message))
+        .filter(Boolean);
+    const isSuccess = envelope && Object.prototype.hasOwnProperty.call(envelope, "isSuccess")
+        ? envelope.isSuccess
+        : envelope && Object.prototype.hasOwnProperty.call(envelope, "IsSuccess")
+            ? envelope.IsSuccess
+            : undefined;
+
+    const failureSeverityTypes = new Set(["ERROR", "ERR", "FATAL", "CRITICAL"]);
+    const hasFailureSeverity = failureSeverityTypes.has(severity);
+    const hasExplicitFailure = isSuccess === false;
+    const blockingMessages = getBlockingShipmentErrorMessages(errorMessages);
+    const hasBlockingErrors = blockingMessages.length > 0;
+
+    // Quick Ship can return errors: [{ message: "Success" }] on successful shipments.
+    // Only block when the envelope says failure, notification severity is failure, or error messages are not benign.
+    if (!hasFailureSeverity && !hasExplicitFailure && !hasBlockingErrors) return null;
+
+    return {
+        severityType: severity || (hasExplicitFailure || hasBlockingErrors ? "ERROR" : "UNKNOWN"),
+        message: notificationMessage || blockingMessages.join("\n") || "Quick Ship returned a shipment failure.",
+        errors: errorMessages,
+        notification
+    };
+}
+
+function normalizeImmediateShipmentFailure(failureInfo) {
+    if (!failureInfo || typeof failureInfo !== "object") return null;
+    const severityType = String(failureInfo.severityType || failureInfo.SeverityType || "").trim().toUpperCase();
+    const message = String(failureInfo.message || failureInfo.Message || "").trim();
+    const errors = Array.isArray(failureInfo.errors) ? failureInfo.errors : [];
+    const failureSeverityTypes = new Set(["ERROR", "ERR", "FATAL", "CRITICAL"]);
+    const hasFailureSeverity = failureSeverityTypes.has(severityType);
+    const blockingMessages = getBlockingShipmentErrorMessages([message, ...errors]);
+    const hasBlockingErrors = blockingMessages.length > 0;
+
+    // Ignore benign immediate messages like "Success" so successful shipments can preview.
+    if (!hasFailureSeverity && !hasBlockingErrors) return null;
+
+    return {
+        severityType: severityType || "ERROR",
+        message: message && !isBenignShipmentMessage(message)
+            ? message
+            : blockingMessages.join("\n") || "Quick Ship returned a shipment failure.",
+        errors,
+        notification: failureInfo.notification || null
+    };
+}
+
+async function getQuickShipShipmentFailureInfo(cleanBase, shipmentNumber, authHeaders = {}, signal = null) {
+    const lookup = String(shipmentNumber || "").trim();
+    if (!cleanBase || !lookup) return null;
+    try {
+        const resp = await fetch(`${cleanBase}/api/shipments/${encodeURIComponent(lookup)}`, { headers: authHeaders || {}, signal: signal || undefined });
+        if (!resp.ok) return null;
+        return getShipmentFailureInfo(await resp.json());
+    } catch (err) {
+        if (signal && (signal.aborted || err.name === "AbortError")) throw err;
+        console.warn("[Quick Ship] Shipment status guard failed open:", err);
+        return null;
+    }
+}
+
+function buildShipmentFailurePreviewMessage(failureInfo, shipmentNumber) {
+    const cleanedMessage = String(failureInfo && failureInfo.message || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    const prefix = shipmentNumber ? `Shipment ${shipmentNumber} failed in Quick Ship.` : "The shipment failed in Quick Ship.";
+    return cleanedMessage ? `${prefix}\n\n${cleanedMessage}` : `${prefix}\n\nReview the Quick Ship shipment error and try again after it is resolved.`;
+}
+
+function sendShipmentFailurePreview(tabId, lookupNumber, failureInfo) {
+    const failureMessage = buildShipmentFailurePreviewMessage(failureInfo, lookupNumber);
+    console.warn("[Quick Ship] Label preview blocked because the shipment failed:", { lookupNumber, severityType: failureInfo && failureInfo.severityType, message: failureInfo && failureInfo.message });
+    chrome.tabs.sendMessage(tabId, {
+        type: "labelPreview",
+        success: false,
+        title: "Shipment Failed",
+        error: failureMessage,
+        category: "shipment_failed",
+        severityType: failureInfo && failureInfo.severityType,
+        isNoData: true
+    });
+}
+
+async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipmentFailure = null) {
     if (activeRequests.has(tabId)) {
         const active = activeRequests.get(tabId);
         if (active.packID === packID && !active.controller.signal.aborted) {
@@ -131,180 +264,41 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
 
     try {
         const cleanBase = baseUrl.replace(/\/$/, "");
-        let targetUrl = null;
+        const lookupNumber = String(packID || "").trim();
 
-        // Resolve exact URL via API
-        try {
-            console.log("Attempting to resolve XML via /api/downloads/getCarrierXMLs...");
-            const fetchOptions = { headers: authHeaders || {}, signal };
-            const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`, fetchOptions);
-            if (listResponse.ok) {
-                const responseData = await listResponse.json();
+        console.log("Attempting to resolve label-bearing CarrierXML via /api/downloads/getCarrierXMLs...", {
+            lookupNumber,
+            baseUrl: cleanBase
+        });
 
-                // Handle nested result array: { result: [...] }
-                const files = (responseData && Array.isArray(responseData.result)) ? responseData.result : responseData;
-
-                if (Array.isArray(files)) {
-                    // Filter for files containing the packID to identify carrier
-                    const packIdMatches = files.filter(f => f.fileName && f.fileName.includes(packID));
-
-                    if (packIdMatches.length === 0) {
-                        sendError("Failed to preview label. File not found.");
-                        return;
-                    }
-
-                    // Determine carrier from the most recent file for this packID.
-                    // Do not use .some(...) across all historical packID matches, because
-                    // the same packID can have older files from a previous carrier/method.
-                    const latestPackIdMatch = getMostRecent(packIdMatches);
-                    const latestPackIdFileName = latestPackIdMatch && latestPackIdMatch.fileName
-                        ? latestPackIdMatch.fileName.toLowerCase()
-                        : "";
-
-                    const isLoomis = latestPackIdFileName.includes("loomis");
-                    const isCanadaPost = latestPackIdFileName.includes("canadapost");
-                    const isAusPost = latestPackIdFileName.includes("auspost");
-
-                    console.log(`[Quick Ship] Most recent file for PackID ${packID}: ${latestPackIdMatch ? latestPackIdMatch.fileName : "none"}`);
-
-                    if (isLoomis) {
-                        // Loomis Way: Find the most recent v2rs file
-                        const loomisMatches = files.filter(f =>
-                            f.fileName &&
-                            f.fileName.toLowerCase().includes("v2rs")
-                        );
-                        const loomisMatch = getMostRecent(loomisMatches);
-                        if (loomisMatch) {
-                            targetUrl = loomisMatch.url;
-                            console.log(`Detected Loomis carrier via PackID. Resolved URL using most recent fileDate: ${targetUrl}`);
-                        }
-                    } else if (isCanadaPost) {
-                        // Canada Post Way: Find artifact ID in the packID file, then find the artifact file
-                        const createShipmentMatches = packIdMatches.filter(f =>
-                            f.fileName &&
-                            f.fileName.toLowerCase().includes("createshipmentresponse")
-                        );
-
-                        let match = createShipmentMatches.length > 0
-                            ? getMostRecent(createShipmentMatches)
-                            : getMostRecent(packIdMatches);
-
-                        if (match) {
-                            try {
-                                const cpResp = await fetch(match.url, { signal });
-                                if (cpResp.ok) {
-                                    const cpText = await cpResp.text();
-                                    const artifactMatch = cpText.match(/<artifact-id>(.*?)<\/artifact-id>/);
-                                    if (artifactMatch && artifactMatch[1]) {
-                                        const artifactID = artifactMatch[1];
-                                        const artifactMatches = files.filter(f =>
-                                            f.fileName &&
-                                            f.fileName.includes("getArtifactResponse") &&
-                                            f.fileName.includes(artifactID)
-                                        );
-                                        const fileWithLabel = getMostRecent(artifactMatches);
-                                        if (fileWithLabel) {
-                                            targetUrl = fileWithLabel.url;
-                                            console.log(`Detected Canada Post. Resolved URL via Artifact ID: ${targetUrl}`);
-                                        }
-                                    }
-                                }
-                            } catch (e) {
-                                console.warn("Failed to fetch Canada Post artifact info", e);
-                            }
-                        }
-                    } else if (isAusPost) {
-                        // Australia Post Way: Look for "Label Image" in the packID file content
-                        const ausMatches = packIdMatches.filter(f =>
-                            f.fileName &&
-                            f.fileName.toLowerCase().includes("createlabelresponse")
-                        );
-                        const ausMatch = getMostRecent(ausMatches);
-                        if (ausMatch) {
-                            targetUrl = ausMatch.url;
-                            console.log(`Detected Australia Post. Using packID file URL: ${targetUrl}`);
-                        }
-                    } else if (packIdMatches.length > 0) {
-                        // Standard Check: Use the most recent matching file.
-                        // Prioritize files containing "Reply" or "Response" if multiple matches exist.
-                        const responseMatches = packIdMatches.filter(f =>
-                            f.fileName &&
-                            (
-                                f.fileName.toLowerCase().includes("reply") ||
-                                f.fileName.toLowerCase().includes("response")
-                            )
-                        );
-
-                        const match = responseMatches.length > 0
-                            ? getMostRecent(responseMatches)
-                            : getMostRecent(packIdMatches);
-
-                        if (match && match.url) {
-                            targetUrl = match.url;
-                            console.log(`Resolved XML URL via API using most recent fileDate: ${targetUrl}`);
-                        }
-                    }
-                }
-            }
-        } catch (e) {
-            if (signal.aborted) throw e;
-            console.warn("API resolution failed", e);
+        const immediateFailureInfo = normalizeImmediateShipmentFailure(immediateShipmentFailure);
+        if (immediateFailureInfo) {
+            sendShipmentFailurePreview(tabId, lookupNumber, immediateFailureInfo);
+            return;
         }
 
-        // Good error handling, commenting out but saving for later
-        //if (!targetUrl) {
-        //    console.log(`API resolution failed.`);
-        //}
-
-        // Retry logic for XML fetch (up to 1 minute)
-        let fileResponse;
-        let attempts = 0;
-        const maxAttempts = 3;
-
-        while (attempts < maxAttempts) {
-            if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-
-            if (targetUrl) {
-                // Strategy 1: Fetch resolved URL
-                try {
-                    const resp = await fetch(targetUrl, { signal });
-                    if (resp.ok) {
-                        fileResponse = resp;
-                        break;
-                    }
-                } catch (e) { if (signal.aborted) throw e; }
-            }
-
-            attempts++;
-            if (attempts < maxAttempts) {
-                // Silent wait, abortable
-                await new Promise((resolve, reject) => {
-                    const timer = setTimeout(() => {
-                        signal.removeEventListener('abort', onAbort);
-                        resolve();
-                    }, 2000);
-                    const onAbort = () => {
-                        clearTimeout(timer);
-                        signal.removeEventListener('abort', onAbort);
-                        reject(new DOMException("Aborted", "AbortError"));
-                    };
-                    signal.addEventListener('abort', onAbort);
-                });
-            }
+        const shipmentFailureInfo = await getQuickShipShipmentFailureInfo(cleanBase, lookupNumber, authHeaders || {}, signal);
+        if (shipmentFailureInfo) {
+            sendShipmentFailurePreview(tabId, lookupNumber, shipmentFailureInfo);
+            return;
         }
 
-        if (!fileResponse || !fileResponse.ok) {
-            if (fileResponse && fileResponse.status === '') {
-                throw new Error("No data found for this carrier.");
-            }
-            throw new Error(`Failed to preview. ${fileResponse ? fileResponse.status : 'Error'}.`);
+        const files = await getCarrierXmlFiles(cleanBase, authHeaders || {});
+        const resolved = await resolveBestLabelFileForLookup(files, lookupNumber, signal);
+
+        if (!resolved || !resolved.text) {
+            sendError(`Failed to preview label. No label-bearing CarrierXML file was found for ${lookupNumber}.`);
+            return;
         }
 
-        const fileContent = await fileResponse.text();
+        console.log("[Quick Ship] Label-bearing CarrierXML resolved:", {
+            lookupNumber,
+            fileName: resolved.file && resolved.file.fileName,
+            reason: resolved.reason,
+            clueCount: resolved.clues ? resolved.clues.length : 0
+        });
 
-        // Delegate processing to shared function
-        await processLabelContent(fileContent, tabId, packID, baseUrl, signal);
-
+        await processLabelContent(resolved.text, tabId, lookupNumber, baseUrl, signal);
     } catch (err) {
         if (signal.aborted || err.name === 'AbortError') {
             console.log(`[Quick Ship] Request aborted for packID: ${packID}`);
@@ -321,14 +315,377 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders) {
     }
 }
 
+function normalizeLookupValue(value) {
+    const text = String(value ?? "").trim();
+    if (!text || text === "0" || text.toLowerCase() === "null" || text.toLowerCase() === "undefined") return null;
+    return text;
+}
+
+function addLookupClue(clues, value) {
+    const normalized = normalizeLookupValue(value);
+    if (!normalized) return;
+    // Avoid extremely short numeric clues because they create too many unrelated filename matches.
+    if (/^\d+$/.test(normalized) && normalized.length < 3) return;
+    clues.add(normalized);
+}
+
+function parsePossiblyNestedJson(text) {
+    if (!text) return null;
+    const trimmed = String(text).trim();
+    if (!trimmed) return null;
+
+    try {
+        let parsed = JSON.parse(trimmed);
+        // Some Quick Ship REST captures are JSON strings containing JSON objects.
+        if (typeof parsed === "string") {
+            const inner = parsed.trim();
+            if (inner.startsWith("{") || inner.startsWith("[")) {
+                parsed = JSON.parse(inner);
+            }
+        }
+        return parsed;
+    } catch {
+        const start = trimmed.indexOf("{");
+        const end = trimmed.lastIndexOf("}");
+        if (start >= 0 && end > start) {
+            try {
+                return JSON.parse(trimmed.slice(start, end + 1));
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+}
+
+function collectShipmentCluesFromText(text, initialLookup = null) {
+    const clues = new Set();
+    addLookupClue(clues, initialLookup);
+
+    const json = parsePossiblyNestedJson(text);
+    if (json) {
+        walkJson(json, (node) => {
+            if (!node || typeof node !== "object") return;
+            [
+                "ShipmentNumber",
+                "shipmentNumber",
+                "TransactionNumber",
+                "transactionNumber",
+                "TrackingNumber",
+                "trackingNumber",
+                "ContainerId",
+                "containerId",
+                "PackID",
+                "packID",
+                "PackId",
+                "PackNum",
+                "MFTransNum",
+                "ArtifactId",
+                "artifact-id"
+            ].forEach(key => addLookupClue(clues, findCaseInsensitive(node, key)));
+        });
+    }
+
+    [
+        "ShipmentNumber",
+        "TransactionNumber",
+        "TrackingNumber",
+        "ContainerId",
+        "PackID",
+        "PackId",
+        "PackNum",
+        "MFTransNum",
+        "artifact-id",
+        "ArtifactId"
+    ].forEach(tag => {
+        const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
+        let match;
+        while ((match = regex.exec(text || "")) !== null) {
+            addLookupClue(clues, decodeXmlEntities(match[1]));
+        }
+    });
+
+    // Canada Post artifact IDs sometimes appear in hyphenated XML tags and filenames.
+    const artifactRegex = /artifact[-_]?id[^A-Za-z0-9]+([A-Za-z0-9_.-]{6,})/gi;
+    let artifactMatch;
+    while ((artifactMatch = artifactRegex.exec(text || "")) !== null) {
+        addLookupClue(clues, artifactMatch[1]);
+    }
+
+    return clues;
+}
+
+async function fetchCarrierFileText(file, signal) {
+    if (!file || !file.url) return null;
+    try {
+        const resp = await fetch(file.url, { signal });
+        if (!resp.ok) {
+            console.warn("[Quick Ship] Candidate CarrierXML fetch failed:", file.fileName, resp.status);
+            return null;
+        }
+        return await resp.text();
+    } catch (err) {
+        if (signal && (signal.aborted || err.name === "AbortError")) throw err;
+        console.warn("[Quick Ship] Candidate CarrierXML read failed:", file.fileName, err);
+        return null;
+    }
+}
+
+function textHasExtractableLabelData(text) {
+    try {
+        return Boolean(extractLabelData(text));
+    } catch (err) {
+        console.warn("[Quick Ship] Label data probe failed:", err);
+        return false;
+    }
+}
+
+function hasAnyClueInFileName(file, clues) {
+    const name = String(file && file.fileName || "").toLowerCase();
+    if (!name) return false;
+    return [...clues].some(clue => clue && name.includes(String(clue).toLowerCase()));
+}
+
+function isNearAnySeedTime(file, seedTimes, windowMs = 5 * 60 * 1000) {
+    const t = getFileTime(file);
+    if (!t || !Array.isArray(seedTimes) || seedTimes.length === 0) return false;
+    return seedTimes.some(seed => seed && Math.abs(t - seed) <= windowMs);
+}
+
+function scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet) {
+    const name = String(file && file.fileName || "").toLowerCase();
+    let score = 0;
+
+    if (directMatchesSet && directMatchesSet.has(file)) score += 80;
+    if (hasAnyClueInFileName(file, clues)) score += 70;
+    if (isNearAnySeedTime(file, seedTimes)) score += 45;
+
+    // Carrier response / label-bearing hints.
+    if (/(shipreply|shipmentresponse|createshipmentresponse|createlabelresponse|getartifactresponse|artifactresponse|labelresponse|ratequote|v2rs)/i.test(name)) score += 80;
+    if (/(reply|response|label|graphic|outputimage|image)/i.test(name)) score += 45;
+    if (/(fedex|ups|usps|endicia|dhl|loomis|canadapost|canpar|auspost|purolator|tforce|xpo|wtx)/i.test(name)) score += 30;
+
+    // Bridge/request files are useful for clue extraction but should not win final label selection by filename alone.
+    if (/(request|_req_|transaction_req|freightcarton|epicorresponse)/i.test(name)) score -= 55;
+
+    // Prefer newer files if all else is close.
+    score += Math.min(25, Math.floor(getFileTime(file) / 100000000000));
+    return score;
+}
+
+function uniqueFiles(files) {
+    const seen = new Set();
+    const output = [];
+    for (const file of files || []) {
+        const key = file && (file.url || file.fileName);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        output.push(file);
+    }
+    return output;
+}
+
+function sortCarrierCandidates(files, clues, seedTimes, directMatchesSet) {
+    return uniqueFiles(files)
+        .map(file => ({
+            file,
+            score: scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet),
+            time: getFileTime(file)
+        }))
+        .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            return b.time - a.time;
+        })
+        .map(item => item.file);
+}
+
+async function resolveBestLabelFileForLookup(files, lookupNumber, signal) {
+    const lookup = normalizeLookupValue(lookupNumber);
+    if (!lookup || !Array.isArray(files) || files.length === 0) return null;
+
+    const initialClues = new Set();
+    addLookupClue(initialClues, lookup);
+
+    const directMatches = files.filter(file => file && file.fileName && file.fileName.includes(lookup));
+    if (directMatches.length === 0) {
+        console.warn(`[Quick Ship] No CarrierXML files directly matched lookup number ${lookup}.`);
+        return null;
+    }
+
+    const directMatchesSet = new Set(directMatches);
+    const seedTimes = directMatches.map(getFileTime).filter(Boolean);
+    const tested = new Set();
+    const discoveredClues = new Set(initialClues);
+
+    const probeCandidate = async (file, reason) => {
+        if (!file || !file.url || tested.has(file.url)) return null;
+        tested.add(file.url);
+
+        const text = await fetchCarrierFileText(file, signal);
+        if (!text) return null;
+
+        const newClues = collectShipmentCluesFromText(text, lookup);
+        newClues.forEach(clue => discoveredClues.add(clue));
+
+        if (textHasExtractableLabelData(text)) {
+            return {
+                file,
+                text,
+                reason,
+                clues: [...discoveredClues]
+            };
+        }
+
+        console.log("[Quick Ship] Candidate did not contain label data:", {
+            fileName: file.fileName,
+            reason,
+            discoveredClues: [...discoveredClues]
+        });
+        return null;
+    };
+
+    // First pass: direct matches by shipment/transaction number. This usually finds bridge files and sometimes label files.
+    const directCandidates = sortCarrierCandidates(directMatches, discoveredClues, seedTimes, directMatchesSet).slice(0, 12);
+    for (const file of directCandidates) {
+        const resolved = await probeCandidate(file, "direct-lookup-match");
+        if (resolved) return resolved;
+    }
+
+    // Second pass: files related by extracted clues or generated close to the bridge files.
+    const expandedCandidates = files.filter(file => {
+        if (!file || !file.fileName) return false;
+        if (tested.has(file.url)) return false;
+        return hasAnyClueInFileName(file, discoveredClues) || isNearAnySeedTime(file, seedTimes);
+    });
+
+    const sortedExpanded = sortCarrierCandidates(expandedCandidates, discoveredClues, seedTimes, directMatchesSet).slice(0, 40);
+    for (const file of sortedExpanded) {
+        const resolved = await probeCandidate(file, "expanded-clue-or-time-match");
+        if (resolved) return resolved;
+    }
+
+    console.warn("[Quick Ship] No label-bearing CarrierXML was found after probing candidates.", {
+        lookup,
+        directMatchCount: directMatches.length,
+        expandedCandidateCount: expandedCandidates.length,
+        clues: [...discoveredClues]
+    });
+
+    return null;
+}
+
+
+function isManualPreviewSource(historyLabel) {
+    return historyLabel === "Clipboard" || historyLabel === "Selection";
+}
+
+function createManualPreviewError(fileContent, stage = "no_extractable_data") {
+    const info = getFriendlyManualPreviewError(fileContent, stage);
+    const err = new Error(info.message);
+    err.isNoData = true;
+    err.previewTitle = info.title;
+    err.previewCategory = info.category;
+    err.previewHint = info.hint;
+    return err;
+}
+
+function getFriendlyManualPreviewError(fileContent, stage = "no_extractable_data") {
+    const text = String(fileContent || "").trim();
+    if (!text) {
+        return {
+            title: "Nothing to Preview",
+            category: "empty_selection",
+            message: "Nothing previewable was found. Highlight the full XML/JSON response or encoded label data, then try Preview again.",
+            hint: "empty"
+        };
+    }
+
+    const decoded = tryDecodeBase64Text(text);
+    if (decoded && decoded.printableRatio > 0.85) {
+        if (/manifest|pick[- ]?up|pickup|fedex ground|shipper #|driver signature/i.test(decoded.text)) {
+            return {
+                title: "Unsupported Text Document",
+                category: "base64_text_document",
+                message: "The selected data decoded successfully, but it appears to be a text manifest/document rather than a label, PDF, image, or ZPL payload.",
+                hint: "base64-text-manifest"
+            };
+        }
+        return {
+            title: "Unsupported Text Data",
+            category: "base64_plain_text",
+            message: "The selected data decoded successfully, but it appears to be plain text instead of a supported label, PDF, image, or ZPL payload.",
+            hint: "base64-text"
+        };
+    }
+
+    if (looksLikeJsonOrXml(text)) {
+        return {
+            title: "No Label Data Found",
+            category: "structured_without_label",
+            message: "The selected XML/JSON did not contain a recognized label field. Try selecting the full carrier response that includes label image, PDF, or ZPL data.",
+            hint: "structured-no-label-field"
+        };
+    }
+
+    if (looksLikeBase64(text)) {
+        return {
+            title: "Unsupported Encoded Data",
+            category: "unsupported_base64",
+            message: "The selected text looks encoded, but it did not decode into a supported label, PDF, image, or ZPL payload.",
+            hint: "unsupported-base64"
+        };
+    }
+
+    return {
+        title: "Nothing to Preview",
+        category: "invalid_selection",
+        message: "The selected text does not appear to contain supported preview data. Highlight the full carrier XML/JSON response, PDF/image base64, or ZPL data, then try Preview again.",
+        hint: "generic-invalid-selection"
+    };
+}
+
+function looksLikeJsonOrXml(text) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) return false;
+    if ((trimmed.startsWith("{") && trimmed.includes("}")) || (trimmed.startsWith("[") && trimmed.includes("]"))) return true;
+    return /<\/?[A-Za-z][\s\S]*?>/.test(trimmed);
+}
+
+function looksLikeBase64(text) {
+    const compact = String(text || "").trim().replace(/^data:[^;]+;base64,/i, "").replace(/\s/g, "");
+    if (compact.length < 40) return false;
+    if (compact.length % 4 !== 0) return false;
+    return /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
+}
+
+function tryDecodeBase64Text(text) {
+    if (!looksLikeBase64(text)) return null;
+    const compact = String(text || "").trim().replace(/^data:[^;]+;base64,/i, "").replace(/\s/g, "");
+    try {
+        const decoded = atob(compact.slice(0, Math.min(compact.length, 12000)));
+        if (!decoded) return null;
+        let printable = 0;
+        for (let i = 0; i < decoded.length; i++) {
+            const code = decoded.charCodeAt(i);
+            if (code === 9 || code === 10 || code === 13 || (code >= 32 && code <= 126)) printable++;
+        }
+        return {
+            text: decoded,
+            printableRatio: printable / decoded.length
+        };
+    } catch {
+        return null;
+    }
+}
+
 /* Shared logic to extract, convert, and display label data from raw text/xml/json. */
 async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, signal = null) {
     try {
         // Use helper from utils.js to find base64 data
         const extracted = extractLabelData(fileContent);
         if (!extracted) {
-            if (historyLabel === "Clipboard" || historyLabel === "Selection") {
-                throw new Error("No valid data found in the copied text. Please check your highlight and try again.");
+            if (isManualPreviewSource(historyLabel)) {
+                throw createManualPreviewError(fileContent, "no_extractable_data");
             }
             throw new Error("No recognized label image tag found in the XML response.");
         }
@@ -434,8 +791,8 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         }
 
         if (processedImages.length === 0) {
-            if (historyLabel === "Clipboard" || historyLabel === "Selection") {
-                throw new Error("No valid label data found in the copied text. Please check your highlight and try again.");
+            if (isManualPreviewSource(historyLabel)) {
+                throw createManualPreviewError(fileContent, "no_valid_processed_labels");
             }
             throw new Error("Failed to process any valid labels.");
         }
@@ -558,6 +915,56 @@ async function cleanupOldViewerPreviews(maxAgeMs = 60 * 60 * 1000) {
     }
 }
 
+
+async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, kineticPackID, baseUrl, freightURL, authHeaders = {}, tabId }) {
+    const sendKineticError = (message, details = {}) => {
+        if (!tabId) return;
+        chrome.tabs.sendMessage(tabId, {
+            type: "labelPreview",
+            success: false,
+            error: message || "Failed to preview the Kinetic label.",
+            isNoData: Boolean(details.isNoData)
+        });
+    };
+
+    try {
+        const cleanLookupNumber = String(shipmentNumber || mfTransNum || packID || "").trim();
+        const cleanBase = String(baseUrl || getQuickShipBaseFromFreightUrl(freightURL) || "").replace(/\/$/, "");
+        if (!cleanLookupNumber || cleanLookupNumber === "0") {
+            throw new Error("Unable to determine the Quick Ship shipment number / MFTransNum for this Kinetic shipment.");
+        }
+        if (!cleanBase) {
+            throw new Error("Unable to determine the connected Quick Ship URL from the Kinetic freightURL.");
+        }
+
+        console.log("[Quick Ship] Kinetic label lookup using Quick Ship shipment number:", {
+            lookupNumber: cleanLookupNumber,
+            kineticPackID: kineticPackID || packID || null,
+            baseUrl: cleanBase
+        });
+        await handlePackID(cleanLookupNumber, cleanBase, tabId, authHeaders || {});
+    } catch (err) {
+        console.error("[Quick Ship] Kinetic label preview failed:", err);
+        sendKineticError(err.message || "Failed to preview the Kinetic label.");
+    }
+}
+
+function getQuickShipBaseFromFreightUrl(freightURL) {
+    if (!freightURL) return null;
+    try {
+        const parsed = new URL(String(freightURL));
+        const marker = "/EpicorFreightService.svc";
+        const markerIndex = parsed.pathname.toLowerCase().indexOf(marker.toLowerCase());
+        if (markerIndex >= 0) {
+            const basePath = parsed.pathname.slice(0, markerIndex).replace(/\/$/, "");
+            return `${parsed.origin}${basePath}`.replace(/\/$/, "");
+        }
+        return parsed.origin.replace(/\/$/, "");
+    } catch {
+        const match = String(freightURL).match(/^(https?:\/\/.+?)\/EpicorFreightService\.svc/i);
+        return match && match[1] ? match[1].replace(/\/$/, "") : null;
+    }
+}
 
 async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, authHeaders = {}, tabId }) {
     const sendP21Error = (message, details = {}) => {

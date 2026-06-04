@@ -1,46 +1,74 @@
-Quick Ship Label Preview 
-Release version 1.5
+Quick Ship Label Preview
+Release version 2.0
 
-What's New!
-Added Packing List preview for Quick Ship integrated with Prophet 21!
-Re-designed the preview tab.
+What's New
+- Added automatic label preview support for Kinetic.
+- Added P21 Packing List preview for Prophet 21 Quick Ship shipments.
+- Improved the document preview experience and preview tab.
+
 
 What This Does
-This extension allows you to easily and quickly preview labels as you ship in Quick Ship. 
+This extension helps preview shipping-related documents from Quick Ship. It can preview labels as shipments are processed, preview copied label data, store recent previews, and provide a manual P21 Packing List preview option when available.
+
+Key Features
+1. Quick Ship label preview
+        Automatically previews labels as shipments are processed in Quick Ship.
+   
+2. Kinetic label preview
+        Automatically previews labels while freighting in Kinetic.
+   
+3. Prophet 21 Packing List preview
+        Displays a floating Check Packing List button only when the Quick Ship shipment is identified as a P21 shipment.
+   
+4. Manual label preview
+        Allows selected/copied label data to be previewed through the browser context menu.
+   
+5. Label history
+        Saves recent label previews for quick access.
+
+Important Requirement
+        Quick Ship must have the GenerateXML app setting enabled.
 
 Supported Browsers
-Chrome, Microsoft Edge or any chromium based browser (Brave, Opera, Vivaldi, etc.)
-
+        Chrome, Microsoft Edge and other chromium browsers such as Brave, Opera, and Vivaldi
 
 Steps to Setup
-Loading the extension
-1. Open chrome://extensions
-2. Enable Developer mode
-3. Click Load unpacked
-4. Select the `teams-meeting-extension` folder
+Loading the extension:
+1. Open chrome://extensions (or edge://extensions).
+2. Enable Developer mode.
+3. Click Load unpacked.
+4. Select the extension folder named "Quick Ship Label Preview".
 
-Using the extension
-IMPORTANT: You must enable the app setting GenerateXML in Quick Ship to use this extension.
+Using the extension:
 1. Click the extension icon in your browser.
-2. Pin the extension.
-3. Click on the extension, and ensure you see the play button.
-4. Ship and preview!
+2. Pin the extension for easier access.
+3. Open the extension popup and confirm the extension is active.
+
 
 What You Can Do
-- Highlight any text containing label data and preview it
-    1. Higlight your text.
-    2. Right click.
-    3. Select Preview Label.
-- Preview labels as you ship
-    1. Ensure the extension is active.
-    2. Perform shipments, and preview the label in the popup toast.
-- View label history 
-    1. Click on the extension icon
-    2. Click on any saved label information
-          *Only the 20 most recent labels are retained*
-- Preview P21 Packing Lists
-    1. Use the floating button to preview packing lists as they are made available.
-        *You can drag and move the button as you like*
+Preview labels as you ship:
+1. Ensure the extension is active.
+2. Process a shipment in Quick Ship or Kinetic.
+3. The label preview opens automatically when label data is found.
+
+Preview Kinetic labels:
+   Process or freight the shipment in Kinetic in Customer Shipment Entry.
+
+
+Preview P21 Packing Lists:
+1. Enter a pick ticket into Quick Ship.
+2. Use the floating Check Packing List button when it appears.
+       (You can drag and move the button as needed.)
+
+Preview copied label data:
+1. Highlight text that contains supported label data.
+2. Right-click the highlighted text.
+3. Select Preview.
+
+View label history:
+1. Click the extension icon.
+2. Select a saved preview from the history list.
+       (Only the 20 most recent label previews are retained.)
 
 Supported Carriers
 - UPS
@@ -55,7 +83,8 @@ Supported Carriers
 - Canada Post
 - DHL
 
-Contact
-Got Questions? Ping me on Teams or shoot me an email at tolu.lawal@epicor.com
 
-Thank you for all that you do! It's my hope this tool makes our work that more enjoyable. 
+Contact
+Got questions? Ping me on Teams or email me at tolu.lawal@epicor.com.
+
+Thank you for all that you do! I hope this tool makes our work a little more smoother and enjoyable.

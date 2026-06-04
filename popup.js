@@ -239,11 +239,18 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // --- Error Modal ---
     const errorModal = document.getElementById("error-modal");
+    const errorModalTitle = document.getElementById("error-modal-title");
     const errorModalBody = document.getElementById("error-modal-body");
     const errorModalCloseBtn = document.getElementById("error-modal-close-btn");
 
-    function showErrorModal(msg) {
-        if (errorModalBody) errorModalBody.textContent = msg;
+    function showErrorModal(msg, title = "Error", details = {}) {
+        if (errorModalTitle) errorModalTitle.textContent = title || "Error";
+        if (errorModalBody) {
+            const hint = details && details.hint ? `
+
+Hint: ${details.hint}` : "";
+            errorModalBody.textContent = `${msg || "An unknown error occurred."}${hint}`;
+        }
         if (errorModal) errorModal.classList.add("active");
     }
 
@@ -435,6 +442,26 @@ document.addEventListener("DOMContentLoaded", async () => {
             }
         });
     }
+
+    function getPreviewErrorHint(msg = {}) {
+        if (msg.hint === "base64-text-manifest") {
+            return "This appears to be a carrier manifest or text document. Select the carrier label response containing PDF, image, or ZPL data instead.";
+        }
+        if (msg.hint === "base64-text") {
+            return "The text decoded correctly, but it is not a supported label payload.";
+        }
+        if (msg.hint === "structured-no-label-field") {
+            return "Try selecting the full XML/JSON response that contains a label field such as GraphicImage, LabelImage, labelData, Base64LabelImage, OutputImage, Data, or ZPL data.";
+        }
+        if (msg.hint === "unsupported-base64") {
+            return "The selected text looks encoded, but it was not recognized as PDF, image, or ZPL label data.";
+        }
+        if (msg.hint === "generic-invalid-selection") {
+            return "Highlight the complete carrier XML/JSON response or encoded label data, then try Preview again.";
+        }
+        return "Select the full label payload and try again.";
+    }
+
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === "labelPreview") {
             pasteBtn.style.opacity = "1";
@@ -445,7 +472,12 @@ document.addEventListener("DOMContentLoaded", async () => {
                 });
             } else {
                 console.error(msg.error);
-                showErrorModal(msg.error || "Failed to process label.");
+                const title = msg.title || (msg.isNoData ? "Nothing to Preview" : "Error");
+                showErrorModal(
+                    msg.error || "Failed to process label.",
+                    title,
+                    { category: msg.category, hint: getPreviewErrorHint(msg) }
+                );
             }
         }
     });
