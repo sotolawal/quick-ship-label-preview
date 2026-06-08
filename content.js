@@ -812,6 +812,7 @@
     let latestShipmentContext = null;
     let latestKineticLabelContext = null;
     let latestKineticAutoPreviewKey = null;
+    let latestKineticFreightStartedAt = 0;
     let p21FabResetTimer = null;
     let p21FabHidden = false;
 
@@ -938,7 +939,7 @@
             return;
         }
 
-        const previewKey = `${quickShipBaseUrl}|${shipmentNumber}`;
+        const previewKey = `${quickShipBaseUrl}|${shipmentNumber}|${context.freightStartedAt || latestKineticFreightStartedAt || "manual"}`;
         if (latestKineticAutoPreviewKey === previewKey) {
             console.log("[Quick Ship] Kinetic auto-preview already requested for:", previewKey);
             return;
@@ -955,10 +956,11 @@
     }
 
     async function requestKineticLabelPreview() {
+        ui.removeP21Fab();
         ui.hideP21Toast();
         const settings = await chrome.storage.local.get("isPaused");
         if (settings.isPaused) {
-            ui.setP21FabState("retry", "Try Again");
+            ui.removeP21Fab();
             ui.showP21Toast("Extension Paused", "Resume the extension to preview the Kinetic label.", { onRetry: requestKineticLabelPreview });
             return;
         }
@@ -969,22 +971,22 @@
         const quickShipBaseUrl = context.quickShipBaseUrl || context.baseUrl;
 
         if (!quickShipBaseUrl) {
-            ui.setP21FabState("retry", "Try Again");
+            ui.removeP21Fab();
             ui.showP21Toast("Missing Quick Ship URL", "Unable to determine the connected Quick Ship URL. Process or refresh the shipment, then try again.", { onRetry: requestKineticLabelPreview });
             return;
         }
 
         if (!shipmentNumber) {
-            setPreviewFabState("retry", "Waiting...");
+            ui.removeP21Fab();
             ui.showP21Toast("Waiting for Shipment Number", "Kinetic PackID was detected, but the Quick Ship shipment number / MFTransNum has not been written back yet. Refresh or reopen the shipment after freight processing, then try again.", { onRetry: requestKineticLabelPreview });
-            resetP21FabAfterDelay(7500);
             return;
         }
 
-        setPreviewFabState("loading", "Previewing...");
+        ui.removeP21Fab();
         ui.showLoading();
         chrome.runtime.sendMessage({
             type: "previewKineticLabel",
+            livePreviewStartedAt: context.freightStartedAt || latestKineticFreightStartedAt || Date.now(),
             packID: shipmentNumber,
             shipmentNumber,
             mfTransNum: shipmentNumber,
@@ -996,7 +998,7 @@
             if (chrome.runtime.lastError) {
                 const message = chrome.runtime.lastError.message || "Failed to request Kinetic label preview.";
                 console.error("[Quick Ship] Kinetic label preview message failed:", message);
-                ui.setP21FabState("retry", "Try Again");
+                ui.removeP21Fab();
                 ui.showP21Toast("Kinetic Label Preview Failed", message, { onRetry: requestKineticLabelPreview });
             }
         });
@@ -1110,19 +1112,24 @@
     window.addEventListener("qs_kinetic_label_context_found", (e) => {
         const detail = e.detail || {};
         const packID = detail.kineticPackID || detail.packID;
+        latestKineticAutoPreviewKey = null;
+        latestKineticFreightStartedAt = Date.now();
         latestKineticLabelContext = {
-            ...(latestKineticLabelContext || {}),
             sourceSystem: "Kinetic",
             documentType: "label",
             packID,
             kineticPackID: packID,
+            shipmentNumber: null,
+            mfTransNum: null,
+            quickShipShipmentNumber: null,
             freightURL: detail.freightURL,
             quickShipBaseUrl: detail.quickShipBaseUrl || detail.baseUrl,
             baseUrl: detail.quickShipBaseUrl || detail.baseUrl,
             kineticBaseUrl: detail.kineticBaseUrl,
             kineticAuthHeaders: detail.kineticAuthHeaders || {},
             sourceUrl: detail.sourceUrl,
-            contextSource: detail.contextSource || "kinetic-freight-carton"
+            contextSource: detail.contextSource || "kinetic-freight-carton",
+            freightStartedAt: latestKineticFreightStartedAt
         };
         ui.removeP21Fab();
         maybeAutoPreviewKineticLabel("freight-context-updated");
@@ -1133,6 +1140,10 @@
         const detail = e.detail || {};
         const kineticPackID = detail.kineticPackID || detail.packID;
         const shipmentNumber = detail.shipmentNumber || detail.mfTransNum;
+        const previousShipmentNumber = latestKineticLabelContext && (latestKineticLabelContext.shipmentNumber || latestKineticLabelContext.mfTransNum || latestKineticLabelContext.quickShipShipmentNumber);
+        if (shipmentNumber && String(shipmentNumber) !== String(previousShipmentNumber || "")) {
+            latestKineticAutoPreviewKey = null;
+        }
         latestKineticLabelContext = {
             ...(latestKineticLabelContext || {}),
             sourceSystem: "Kinetic",
@@ -1144,7 +1155,8 @@
             kineticBaseUrl: detail.kineticBaseUrl || (latestKineticLabelContext && latestKineticLabelContext.kineticBaseUrl),
             kineticAuthHeaders: detail.kineticAuthHeaders || (latestKineticLabelContext && latestKineticLabelContext.kineticAuthHeaders) || {},
             sourceUrl: detail.sourceUrl,
-            contextSource: "kinetic-custship-getbyid"
+            contextSource: "kinetic-custship-getbyid",
+            freightStartedAt: latestKineticFreightStartedAt || (latestKineticLabelContext && latestKineticLabelContext.freightStartedAt) || Date.now()
         };
         ui.removeP21Fab();
         console.log("[Quick Ship] Kinetic MFTransNum context merged:", latestKineticLabelContext);
@@ -1154,6 +1166,7 @@
     window.addEventListener("qs_shipment_context_found", (e) => {
         latestKineticLabelContext = null;
         latestKineticAutoPreviewKey = null;
+        latestKineticFreightStartedAt = 0;
         const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber } = e.detail || {};
         latestShipmentContext = {
             packID,
@@ -1172,6 +1185,7 @@
     window.addEventListener("label_packid_found", async (e) => {
         latestKineticLabelContext = null;
         latestKineticAutoPreviewKey = null;
+        latestKineticFreightStartedAt = 0;
         const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber, shipmentFailure } = e.detail;
 
         latestShipmentContext = {

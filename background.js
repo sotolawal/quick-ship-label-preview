@@ -237,7 +237,7 @@ function sendShipmentFailurePreview(tabId, lookupNumber, failureInfo) {
     });
 }
 
-async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipmentFailure = null) {
+async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipmentFailure = null, previewOptions = {}) {
     if (activeRequests.has(tabId)) {
         const active = activeRequests.get(tabId);
         if (active.packID === packID && !active.controller.signal.aborted) {
@@ -283,14 +283,26 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipme
             return;
         }
 
-        const files = await getCarrierXmlFiles(cleanBase, authHeaders || {});
-        const resolved = await resolveBestLabelFileForLookup(files, lookupNumber, signal);
-
+        const liveMode = Boolean(previewOptions && previewOptions.liveMode);
+        const liveStartedAt = Number(previewOptions && previewOptions.startedAt) || Date.now();
+        const maxWaitMs = liveMode ? Number(previewOptions.maxWaitMs || 65000) : 0;
+        const retryDelayMs = liveMode ? Number(previewOptions.retryDelayMs || 2500) : 0;
+        const startedWaitingAt = Date.now();
+        let resolved = null;
+        let attempt = 0;
+        do {
+            attempt++;
+            const files = await getCarrierXmlFiles(cleanBase, authHeaders || {});
+            resolved = await resolveBestLabelFileForLookup(files, lookupNumber, signal, { ...previewOptions, liveMode, startedAt: liveStartedAt });
+            if (resolved && resolved.text) break;
+            if (!liveMode || Date.now() - startedWaitingAt >= maxWaitMs) break;
+            console.log("[Quick Ship] Live label not ready yet; retrying CarrierXML resolution.", { lookupNumber, attempt, elapsedMs: Date.now() - startedWaitingAt, maxWaitMs });
+            await sleep(retryDelayMs);
+        } while (!signal.aborted);
         if (!resolved || !resolved.text) {
-            sendError(`Failed to preview label. No label-bearing CarrierXML file was found for ${lookupNumber}.`);
+            sendError(liveMode ? `Label is not ready yet for ${lookupNumber}. Quick Ship may still be generating the carrier response. Try again in a moment.` : `Failed to preview label. No label-bearing CarrierXML file was found for ${lookupNumber}.`);
             return;
         }
-
         console.log("[Quick Ship] Label-bearing CarrierXML resolved:", {
             lookupNumber,
             fileName: resolved.file && resolved.file.fileName,
@@ -319,6 +331,33 @@ function normalizeLookupValue(value) {
     const text = String(value ?? "").trim();
     if (!text || text === "0" || text.toLowerCase() === "null" || text.toLowerCase() === "undefined") return null;
     return text;
+}
+
+
+function escapeRegex(value) {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function fileNameHasLookupToken(fileName, lookup) {
+    const name = String(fileName || "");
+    const token = String(lookup || "").trim();
+    if (!name || !token) return false;
+    return new RegExp(`(^|[^A-Za-z0-9])${escapeRegex(token)}([^A-Za-z0-9]|$)`, "i").test(name);
+}
+function fileIsNewEnoughForLivePreview(file, startedAt, toleranceMs = 15000) {
+    if (!startedAt) return true;
+    const t = getFileTime(file);
+    if (!t) return true;
+    return t >= (startedAt - toleranceMs);
+}
+function isLiveResolverOptions(options = {}) {
+    return Boolean(options && options.liveMode);
+}
+function getLiveResolverStartedAt(options = {}) {
+    const startedAt = Number(options && options.startedAt);
+    return Number.isFinite(startedAt) && startedAt > 0 ? startedAt : 0;
+}
+async function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function addLookupClue(clues, value) {
@@ -440,10 +479,17 @@ function textHasExtractableLabelData(text) {
     }
 }
 
-function hasAnyClueInFileName(file, clues) {
+function hasAnyClueInFileName(file, clues, options = {}) {
     const name = String(file && file.fileName || "").toLowerCase();
     if (!name) return false;
-    return [...clues].some(clue => clue && name.includes(String(clue).toLowerCase()));
+    const liveMode = isLiveResolverOptions(options);
+    return [...clues].some(clue => {
+        if (!clue) return false;
+        const clueText = String(clue);
+        return (liveMode || /^\d+$/.test(clueText))
+            ? fileNameHasLookupToken(name, clueText)
+            : name.includes(clueText.toLowerCase());
+    });
 }
 
 function isNearAnySeedTime(file, seedTimes, windowMs = 5 * 60 * 1000) {
@@ -452,23 +498,23 @@ function isNearAnySeedTime(file, seedTimes, windowMs = 5 * 60 * 1000) {
     return seedTimes.some(seed => seed && Math.abs(t - seed) <= windowMs);
 }
 
-function scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet) {
+function scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet, options = {}) {
     const name = String(file && file.fileName || "").toLowerCase();
+    const liveMode = isLiveResolverOptions(options);
+    const startedAt = getLiveResolverStartedAt(options);
     let score = 0;
-
     if (directMatchesSet && directMatchesSet.has(file)) score += 80;
-    if (hasAnyClueInFileName(file, clues)) score += 70;
-    if (isNearAnySeedTime(file, seedTimes)) score += 45;
-
-    // Carrier response / label-bearing hints.
+    if (hasAnyClueInFileName(file, clues, options)) score += liveMode ? 120 : 70;
+    if (!liveMode && isNearAnySeedTime(file, seedTimes)) score += 45;
+    if (liveMode) {
+        const t = getFileTime(file);
+        if (startedAt && t && t < startedAt - 15000) score -= 250;
+        if (startedAt && t && t >= startedAt - 15000) score += 80;
+    }
     if (/(shipreply|shipmentresponse|createshipmentresponse|createlabelresponse|getartifactresponse|artifactresponse|labelresponse|ratequote|v2rs)/i.test(name)) score += 80;
     if (/(reply|response|label|graphic|outputimage|image)/i.test(name)) score += 45;
     if (/(fedex|ups|usps|endicia|dhl|loomis|canadapost|canpar|auspost|purolator|tforce|xpo|wtx)/i.test(name)) score += 30;
-
-    // Bridge/request files are useful for clue extraction but should not win final label selection by filename alone.
     if (/(request|_req_|transaction_req|freightcarton|epicorresponse)/i.test(name)) score -= 55;
-
-    // Prefer newer files if all else is close.
     score += Math.min(25, Math.floor(getFileTime(file) / 100000000000));
     return score;
 }
@@ -485,92 +531,59 @@ function uniqueFiles(files) {
     return output;
 }
 
-function sortCarrierCandidates(files, clues, seedTimes, directMatchesSet) {
+function sortCarrierCandidates(files, clues, seedTimes, directMatchesSet, options = {}) {
     return uniqueFiles(files)
-        .map(file => ({
-            file,
-            score: scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet),
-            time: getFileTime(file)
-        }))
-        .sort((a, b) => {
-            if (b.score !== a.score) return b.score - a.score;
-            return b.time - a.time;
-        })
+        .map(file => ({ file, score: scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet, options), time: getFileTime(file) }))
+        .sort((a, b) => b.score !== a.score ? b.score - a.score : b.time - a.time)
         .map(item => item.file);
 }
 
-async function resolveBestLabelFileForLookup(files, lookupNumber, signal) {
+async function resolveBestLabelFileForLookup(files, lookupNumber, signal, options = {}) {
     const lookup = normalizeLookupValue(lookupNumber);
     if (!lookup || !Array.isArray(files) || files.length === 0) return null;
-
+    const liveMode = isLiveResolverOptions(options);
+    const startedAt = getLiveResolverStartedAt(options);
     const initialClues = new Set();
     addLookupClue(initialClues, lookup);
-
-    const directMatches = files.filter(file => file && file.fileName && file.fileName.includes(lookup));
+    const directMatches = files.filter(file => {
+        if (!file || !file.fileName) return false;
+        if (liveMode && !fileIsNewEnoughForLivePreview(file, startedAt)) return false;
+        return liveMode ? fileNameHasLookupToken(file.fileName, lookup) : file.fileName.includes(lookup);
+    });
     if (directMatches.length === 0) {
-        console.warn(`[Quick Ship] No CarrierXML files directly matched lookup number ${lookup}.`);
+        console.warn(`[Quick Ship] No CarrierXML files directly matched lookup number ${lookup}.`, { liveMode, startedAt });
         return null;
     }
-
     const directMatchesSet = new Set(directMatches);
     const seedTimes = directMatches.map(getFileTime).filter(Boolean);
     const tested = new Set();
     const discoveredClues = new Set(initialClues);
-
     const probeCandidate = async (file, reason) => {
         if (!file || !file.url || tested.has(file.url)) return null;
+        if (liveMode && !fileIsNewEnoughForLivePreview(file, startedAt)) return null;
         tested.add(file.url);
-
         const text = await fetchCarrierFileText(file, signal);
         if (!text) return null;
-
         const newClues = collectShipmentCluesFromText(text, lookup);
         newClues.forEach(clue => discoveredClues.add(clue));
-
-        if (textHasExtractableLabelData(text)) {
-            return {
-                file,
-                text,
-                reason,
-                clues: [...discoveredClues]
-            };
-        }
-
-        console.log("[Quick Ship] Candidate did not contain label data:", {
-            fileName: file.fileName,
-            reason,
-            discoveredClues: [...discoveredClues]
-        });
+        if (textHasExtractableLabelData(text)) return { file, text, reason, clues: [...discoveredClues] };
+        console.log("[Quick Ship] Candidate did not contain label data:", { fileName: file.fileName, reason, liveMode, discoveredClues: [...discoveredClues] });
         return null;
     };
-
-    // First pass: direct matches by shipment/transaction number. This usually finds bridge files and sometimes label files.
-    const directCandidates = sortCarrierCandidates(directMatches, discoveredClues, seedTimes, directMatchesSet).slice(0, 12);
-    for (const file of directCandidates) {
+    for (const file of sortCarrierCandidates(directMatches, discoveredClues, seedTimes, directMatchesSet, options).slice(0, liveMode ? 20 : 12)) {
         const resolved = await probeCandidate(file, "direct-lookup-match");
         if (resolved) return resolved;
     }
-
-    // Second pass: files related by extracted clues or generated close to the bridge files.
     const expandedCandidates = files.filter(file => {
-        if (!file || !file.fileName) return false;
-        if (tested.has(file.url)) return false;
-        return hasAnyClueInFileName(file, discoveredClues) || isNearAnySeedTime(file, seedTimes);
+        if (!file || !file.fileName || tested.has(file.url)) return false;
+        if (liveMode && !fileIsNewEnoughForLivePreview(file, startedAt)) return false;
+        return liveMode ? hasAnyClueInFileName(file, discoveredClues, options) : hasAnyClueInFileName(file, discoveredClues, options) || isNearAnySeedTime(file, seedTimes);
     });
-
-    const sortedExpanded = sortCarrierCandidates(expandedCandidates, discoveredClues, seedTimes, directMatchesSet).slice(0, 40);
-    for (const file of sortedExpanded) {
-        const resolved = await probeCandidate(file, "expanded-clue-or-time-match");
+    for (const file of sortCarrierCandidates(expandedCandidates, discoveredClues, seedTimes, directMatchesSet, options).slice(0, liveMode ? 20 : 40)) {
+        const resolved = await probeCandidate(file, liveMode ? "live-expanded-token-match" : "expanded-clue-or-time-match");
         if (resolved) return resolved;
     }
-
-    console.warn("[Quick Ship] No label-bearing CarrierXML was found after probing candidates.", {
-        lookup,
-        directMatchCount: directMatches.length,
-        expandedCandidateCount: expandedCandidates.length,
-        clues: [...discoveredClues]
-    });
-
+    console.warn("[Quick Ship] No label-bearing CarrierXML was found after probing candidates.", { lookup, liveMode, startedAt, directMatchCount: directMatches.length, expandedCandidateCount: expandedCandidates.length, clues: [...discoveredClues] });
     return null;
 }
 
@@ -916,7 +929,7 @@ async function cleanupOldViewerPreviews(maxAgeMs = 60 * 60 * 1000) {
 }
 
 
-async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, kineticPackID, baseUrl, freightURL, authHeaders = {}, tabId }) {
+async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, kineticPackID, baseUrl, freightURL, authHeaders = {}, tabId, livePreviewStartedAt = Date.now() }) {
     const sendKineticError = (message, details = {}) => {
         if (!tabId) return;
         chrome.tabs.sendMessage(tabId, {
@@ -942,7 +955,12 @@ async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, k
             kineticPackID: kineticPackID || packID || null,
             baseUrl: cleanBase
         });
-        await handlePackID(cleanLookupNumber, cleanBase, tabId, authHeaders || {});
+        await handlePackID(cleanLookupNumber, cleanBase, tabId, authHeaders || {}, null, {
+            liveMode: true,
+            startedAt: livePreviewStartedAt || Date.now(),
+            maxWaitMs: 65000,
+            retryDelayMs: 2500
+        });
     } catch (err) {
         console.error("[Quick Ship] Kinetic label preview failed:", err);
         sendKineticError(err.message || "Failed to preview the Kinetic label.");
