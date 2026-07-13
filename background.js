@@ -24,8 +24,34 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     }
 });
 
-//Check if PackID message is sucessfully received
-chrome.runtime.onMessage.addListener(async (msg, sender) => {
+// Check if PackID message is successfully received.
+// CHANGE: One response-owning listener prevents async message response races.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === "testQuickShipConnection") {
+        testQuickShipConnection(msg.candidateBase, msg.authHeaders || {})
+            .then(sendResponse)
+            .catch(err => sendResponse({
+                success: false,
+                error: err.message || "Connection test failed."
+            }));
+        return true;
+    }
+
+    if (msg.type === "saveQuickShipBaseOverride") {
+        saveQuickShipBaseOverride(msg.configuredBase, msg.candidateBase, msg.authHeaders || {})
+            .then(sendResponse)
+            .catch(err => sendResponse({
+                success: false,
+                error: err.message || "Unable to save the connection."
+            }));
+        return true;
+    }
+
+    void handleRuntimeMessage(msg, sender);
+    return false;
+});
+
+async function handleRuntimeMessage(msg, sender) {
     if (msg.type === "packID") {
         // Check if paused
         const settings = await chrome.storage.local.get("isPaused");
@@ -75,10 +101,6 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
             baseUrl: msg.baseUrl,
             freightURL: msg.freightURL,
             authHeaders: msg.authHeaders || {},
-            // CHANGE: Preserve the Kinetic REST response when the content script supplies it.
-            // Newer responses expose the Quick Ship lookup key as
-            // returnObj.FreightCartonResponseTracking[].PackID.
-            kineticResponse: msg.kineticResponse || msg.responseBody || msg.response || msg.data || msg.returnObj || null,
             tabId
         });
     } else if (msg.type === "previewP21PackingList") {
@@ -90,7 +112,7 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
             tabId
         });
     }
-});
+}
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "qs-preview-label" && info.selectionText) {
@@ -103,6 +125,79 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 const activeRequests = new Map();
+const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
+
+// CHANGE: Keep configured and browser-accessible Quick Ship addresses separate.
+function normalizeQuickShipBase(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+    try {
+        const parsed = new URL(withProtocol);
+        const marker = "/EpicorFreightService.svc";
+        const markerIndex = parsed.pathname.toLowerCase().indexOf(marker.toLowerCase());
+        const basePath = markerIndex >= 0 ? parsed.pathname.slice(0, markerIndex) : parsed.pathname;
+        return `${parsed.origin}${basePath}`.replace(/\/$/, "");
+    } catch {
+        return withProtocol.replace(/\/$/, "");
+    }
+}
+function quickShipOverrideKey(value) {
+    return normalizeQuickShipBase(value).toLowerCase();
+}
+async function getEffectiveQuickShipBase(configuredBase) {
+    const normalizedConfigured = normalizeQuickShipBase(configuredBase);
+    if (!normalizedConfigured) return { configuredBase: "", effectiveBase: "", overridden: false };
+    const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
+    const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
+    const mapped = normalizeQuickShipBase(mappings[quickShipOverrideKey(normalizedConfigured)]);
+    return {
+        configuredBase: normalizedConfigured,
+        effectiveBase: mapped || normalizedConfigured,
+        overridden: Boolean(mapped)
+    };
+}
+async function testQuickShipConnection(candidateBase, authHeaders = {}) {
+    const normalized = normalizeQuickShipBase(candidateBase);
+    if (!normalized) return { success: false, error: "Enter a Quick Ship base URL." };
+    try {
+        const response = await fetch(`${normalized}/api/downloads/getCarrierXMLs`, { headers: authHeaders || {} });
+        if (!response.ok) {
+            return { success: false, reachable: true, status: response.status, candidateBase: normalized, error: `Quick Ship responded with HTTP ${response.status}.` };
+        }
+        const data = await response.json();
+        const files = data && Array.isArray(data.result) ? data.result : data;
+        if (!Array.isArray(files)) return { success: false, reachable: true, candidateBase: normalized, error: "The server responded, but it did not return the expected CarrierXML list." };
+        return { success: true, reachable: true, candidateBase: normalized };
+    } catch (err) {
+        return { success: false, reachable: false, candidateBase: normalized, error: "Quick Ship could not be reached at this address." };
+    }
+}
+async function saveQuickShipBaseOverride(configuredBase, candidateBase, authHeaders = {}) {
+    const configured = normalizeQuickShipBase(configuredBase);
+    if (!configured) return { success: false, error: "The configured Kinetic Quick Ship address is required." };
+    const tested = await testQuickShipConnection(candidateBase, authHeaders);
+    if (!tested.success) return tested;
+    const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
+    const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
+    mappings[quickShipOverrideKey(configured)] = tested.candidateBase;
+    await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings });
+    return { success: true, configuredBase: configured, effectiveBase: tested.candidateBase };
+}
+function isQuickShipNetworkFailure(err) {
+    if (!err || err.name === "AbortError") return false;
+    const text = String(err.message || err).toLowerCase();
+    return err instanceof TypeError || /failed to fetch|networkerror|network request failed|load failed/.test(text);
+}
+function sendQuickShipConnectionRequired(tabId, configuredBase, attemptedBase, err) {
+    if (!tabId) return;
+    chrome.tabs.sendMessage(tabId, {
+        type: "quickShipConnectionRequired",
+        configuredBase: normalizeQuickShipBase(configuredBase),
+        attemptedBase: normalizeQuickShipBase(attemptedBase),
+        error: err && err.message ? err.message : "Failed to fetch"
+    }).catch(() => {});
+}
 
 function getFileTime(file) {
     const parsed = file && file.fileDate
@@ -267,12 +362,16 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipme
     };
 
     try {
-        const cleanBase = baseUrl.replace(/\/$/, "");
+        const baseResolution = await getEffectiveQuickShipBase(baseUrl);
+        const configuredBase = baseResolution.configuredBase;
+        const cleanBase = baseResolution.effectiveBase;
         const lookupNumber = String(packID || "").trim();
 
         console.log("Attempting to resolve label-bearing CarrierXML via /api/downloads/getCarrierXMLs...", {
             lookupNumber,
-            baseUrl: cleanBase
+            configuredBase,
+            baseUrl: cleanBase,
+            overridden: baseResolution.overridden
         });
 
         const immediateFailureInfo = normalizeImmediateShipmentFailure(immediateShipmentFailure);
@@ -320,7 +419,11 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipme
             console.log(`[Quick Ship] Request aborted for packID: ${packID}`);
         } else {
             console.error("Background processing error:", err);
-            sendError(err.message || "Unknown error occurred during processing.");
+            if (isQuickShipNetworkFailure(err)) {
+                sendQuickShipConnectionRequired(tabId, baseUrl, baseUrl, err);
+            } else {
+                sendError(err.message || "Unknown error occurred during processing.");
+            }
         }
     } finally {
         // Cleanup: remove from activeRequests if it's still this controller
@@ -347,7 +450,11 @@ function fileNameHasLookupToken(fileName, lookup) {
     if (!name || !token) return false;
     return new RegExp(`(^|[^A-Za-z0-9])${escapeRegex(token)}([^A-Za-z0-9]|$)`, "i").test(name);
 }
-function fileIsNewEnoughForLivePreview(file, startedAt, toleranceMs = 15000) {
+// CHANGE: CarrierXML files may be written before Kinetic publishes the completed
+// transaction context to the browser. Exact filename-token matching remains required.
+const LIVE_FILE_TIME_TOLERANCE_MS = 90 * 1000;
+
+function fileIsNewEnoughForLivePreview(file, startedAt, toleranceMs = LIVE_FILE_TIME_TOLERANCE_MS) {
     if (!startedAt) return true;
     const t = getFileTime(file);
     if (!t) return true;
@@ -580,8 +687,9 @@ function scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet, options
     if (!liveMode && isNearAnySeedTime(file, seedTimes)) score += 45;
     if (liveMode) {
         const t = getFileTime(file);
-        if (startedAt && t && t < startedAt - 15000) score -= 250;
-        if (startedAt && t && t >= startedAt - 15000) score += 80;
+        const minimumLiveFileTime = startedAt - LIVE_FILE_TIME_TOLERANCE_MS;
+        if (startedAt && t && t < minimumLiveFileTime) score -= 250;
+        if (startedAt && t && t >= minimumLiveFileTime) score += 80;
     }
     if (/(shipreply|shipmentresponse|createshipmentresponse|createlabelresponse|getartifactresponse|artifactresponse|labelresponse|ratequote|v2rs)/i.test(name)) score += 80;
     if (/(reply|response|label|graphic|outputimage|image)/i.test(name)) score += 45;
@@ -623,7 +731,21 @@ async function resolveBestLabelFileForLookup(files, lookupNumber, signal, option
         return liveMode ? fileNameHasLookupToken(file.fileName, lookup) : file.fileName.includes(lookup);
     });
     if (directMatches.length === 0) {
-        console.warn(`[Quick Ship] No CarrierXML files directly matched lookup number ${lookup}.`, { liveMode, startedAt });
+        const tokenMatchesIgnoringTime = files.filter(file =>
+            file && file.fileName && fileNameHasLookupToken(file.fileName, lookup)
+        );
+        const newestRejectedTime = tokenMatchesIgnoringTime
+            .map(getFileTime)
+            .filter(Boolean)
+            .sort((a, b) => b - a)[0] || null;
+        console.warn(`[Quick Ship] No eligible CarrierXML files matched lookup number ${lookup}.`, {
+            liveMode,
+            startedAt,
+            toleranceMs: liveMode ? LIVE_FILE_TIME_TOLERANCE_MS : null,
+            tokenMatchesIgnoringTime: tokenMatchesIgnoringTime.length,
+            newestRejectedTime,
+            newestRejectedAgeMs: startedAt && newestRejectedTime ? startedAt - newestRejectedTime : null
+        });
         return null;
     }
     const directMatchesSet = new Set(directMatches);
@@ -1037,34 +1159,7 @@ async function cleanupOldViewerPreviews(maxAgeMs = 60 * 60 * 1000) {
 }
 
 
-// CHANGE: Resolve the lookup value from the new Kinetic REST response shape.
-// FreightCartonResponse.TransactionNumber remains useful as a legacy fallback, but
-// FreightCartonResponseTracking.PackID is now the key used to locate CarrierXML files.
-function extractKineticTrackingPackID(value) {
-    if (!value) return null;
-
-    let root = value;
-    if (typeof root === "string") root = parsePossiblyNestedJson(root);
-    if (!root || typeof root !== "object") return null;
-
-    let resolvedPackID = null;
-    walkJson(root, (node) => {
-        if (resolvedPackID || !node || typeof node !== "object" || Array.isArray(node)) return;
-        const trackingRows = findCaseInsensitive(node, "FreightCartonResponseTracking");
-        if (!Array.isArray(trackingRows)) return;
-
-        for (const row of trackingRows) {
-            const candidate = normalizeLookupValue(findCaseInsensitive(row, "PackID"));
-            if (candidate) {
-                resolvedPackID = candidate;
-                break;
-            }
-        }
-    });
-    return resolvedPackID;
-}
-
-async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, kineticPackID, baseUrl, freightURL, authHeaders = {}, kineticResponse = null, tabId, livePreviewStartedAt = Date.now() }) {
+async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, kineticPackID, baseUrl, freightURL, authHeaders = {}, tabId, livePreviewStartedAt = Date.now() }) {
     const sendKineticError = (message, details = {}) => {
         if (!tabId) return;
         chrome.tabs.sendMessage(tabId, {
@@ -1076,11 +1171,10 @@ async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, k
     };
 
     try {
-        // CHANGE: Prefer FreightCartonResponseTracking.PackID (for example, 1188)
-        // instead of FreightCartonResponse.TransactionNumber (for example, 288).
-        const responseTrackingPackID = extractKineticTrackingPackID(kineticResponse);
+        // CHANGE: Quick Ship CarrierXML resolution uses the transaction/shipment number.
+        // Kinetic PackID remains only a final legacy fallback.
         const cleanLookupNumber = String(
-            responseTrackingPackID || kineticPackID || packID || shipmentNumber || mfTransNum || ""
+            shipmentNumber || mfTransNum || packID || kineticPackID || ""
         ).trim();
         const cleanBase = String(baseUrl || getQuickShipBaseFromFreightUrl(freightURL) || "").replace(/\/$/, "");
         if (!cleanLookupNumber || cleanLookupNumber === "0") {
@@ -1092,14 +1186,10 @@ async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, k
 
         console.log("[Quick Ship] Kinetic label lookup using Quick Ship shipment number:", {
             lookupNumber: cleanLookupNumber,
-            lookupSource: responseTrackingPackID
-                ? "FreightCartonResponseTracking.PackID"
-                : (kineticPackID || packID)
-                    ? "Kinetic PackID"
-                    : "legacy TransactionNumber / MFTransNum",
-            responseTrackingPackID,
-            kineticPackID: kineticPackID || packID || null,
-            legacyTransactionNumber: shipmentNumber || mfTransNum || null,
+            lookupSource: shipmentNumber || mfTransNum
+                ? "TransactionNumber / MFTransNum"
+                : "legacy PackID fallback",
+            kineticPackID: kineticPackID || null,
             baseUrl: cleanBase
         });
         await handlePackID(cleanLookupNumber, cleanBase, tabId, authHeaders || {}, null, {

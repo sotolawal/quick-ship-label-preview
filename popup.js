@@ -10,6 +10,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     const p21FabToggleBtn = document.getElementById("p21-fab-toggle-btn");
     const p21FabStatus = document.getElementById("p21-fab-status");
     const p21FabResetBtn = document.getElementById("p21-fab-reset-btn");
+    // CHANGE: Quick Ship connection mapping controls.
+    const quickShipConnectionsBtn = document.getElementById("quick-ship-connections-btn");
+    const connectionsModal = document.getElementById("connections-modal");
+    const connectionsList = document.getElementById("connections-list");
+    const configuredBaseInput = document.getElementById("configured-base-input");
+    const accessibleBaseInput = document.getElementById("accessible-base-input");
+    const connectionsStatus = document.getElementById("connections-status");
+    const connectionsCloseBtn = document.getElementById("connections-close-btn");
+    const connectionsSaveBtn = document.getElementById("connections-save-btn");
     
     let fullHistory = [];
 
@@ -128,6 +137,67 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
     updateP21FabMenuUI();
+
+    // --- Quick Ship Connections ---
+    const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
+    function normalizePopupBase(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+        try {
+            const parsed = new URL(withProtocol);
+            const markerIndex = parsed.pathname.toLowerCase().indexOf("/epicorfreightservice.svc");
+            const basePath = markerIndex >= 0 ? parsed.pathname.slice(0, markerIndex) : parsed.pathname;
+            return `${parsed.origin}${basePath}`.replace(/\/$/, "");
+        } catch { return withProtocol.replace(/\/$/, ""); }
+    }
+    async function renderConnectionMappings() {
+        if (!connectionsList) return;
+        const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
+        const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
+        connectionsList.innerHTML = "";
+        const entries = Object.entries(mappings);
+        if (!entries.length) {
+            connectionsList.innerHTML = '<div style="color:#64748b;font-size:12px;">No saved alternate addresses.</div>';
+            return;
+        }
+        for (const [configured, effective] of entries) {
+            const row = document.createElement("div"); row.className = "connection-row";
+            const from = document.createElement("code"); from.textContent = configured;
+            const arrow = document.createElement("div"); arrow.textContent = "uses"; arrow.style.color = "#64748b";
+            const to = document.createElement("code"); to.textContent = effective;
+            const remove = document.createElement("button"); remove.className = "connection-remove"; remove.textContent = "Remove mapping";
+            remove.addEventListener("click", async () => {
+                delete mappings[configured];
+                await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings });
+                await renderConnectionMappings();
+            });
+            row.append(from, arrow, to, remove); connectionsList.appendChild(row);
+        }
+    }
+    function closeConnectionsModal() { connectionsModal?.classList.remove("active"); }
+    quickShipConnectionsBtn?.addEventListener("click", async () => {
+        closeMoreActionsMenu(); connectionsStatus.textContent = "";
+        await renderConnectionMappings(); connectionsModal?.classList.add("active");
+    });
+    connectionsCloseBtn?.addEventListener("click", closeConnectionsModal);
+    connectionsModal?.addEventListener("click", event => { if (event.target === connectionsModal) closeConnectionsModal(); });
+    connectionsSaveBtn?.addEventListener("click", () => {
+        const configuredBase = normalizePopupBase(configuredBaseInput.value);
+        const candidateBase = normalizePopupBase(accessibleBaseInput.value);
+        if (!configuredBase || !candidateBase) { connectionsStatus.textContent = "Enter both addresses."; return; }
+        connectionsSaveBtn.disabled = true; connectionsSaveBtn.textContent = "Testing...";
+        connectionsStatus.textContent = "Testing the browser-accessible address...";
+        chrome.runtime.sendMessage({ type: "saveQuickShipBaseOverride", configuredBase, candidateBase }, async result => {
+            connectionsSaveBtn.disabled = false; connectionsSaveBtn.textContent = "Test & Save";
+            if (chrome.runtime.lastError || !result || !result.success) {
+                connectionsStatus.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed."; return;
+            }
+            connectionsStatus.textContent = "Connected and saved.";
+            configuredBaseInput.value = ""; accessibleBaseInput.value = "";
+            await renderConnectionMappings();
+        });
+    });
     // --- Load History ---
     async function loadHistory() {
         try {

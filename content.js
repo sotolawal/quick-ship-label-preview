@@ -556,6 +556,14 @@
                 .qs-p21-toast-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
                 .qs-p21-toast-btn { border: 1px solid #bad7e8; background: #fff; color: #0d6da0; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
                 .qs-p21-toast-btn:hover { background: #eef8fd; }
+                /* CHANGE: Persistent Quick Ship connection recovery form. */
+                .qs-connection-copy { font-size: 13px; line-height: 1.45; color: #334155; margin-bottom: 10px; }
+                .qs-connection-url { display: block; margin-top: 5px; padding: 7px 8px; background: #f1f5f9; border-radius: 5px; color: #0f172a; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+                .qs-connection-input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; padding: 9px 10px; font: inherit; color: #0f172a; outline: none; }
+                .qs-connection-input:focus { border-color: #0d6da0; box-shadow: 0 0 0 2px rgba(13,109,160,.12); }
+                .qs-connection-error { min-height: 18px; margin-top: 7px; color: #c62828; font-size: 12px; }
+                .qs-p21-toast-btn.primary { background: #0d6da0; border-color: #0d6da0; color: #fff; }
+                .qs-p21-toast-btn:disabled { opacity: .65; cursor: wait; }
             `;
             shadow.appendChild(style);
             return shadow;
@@ -659,6 +667,9 @@
         }
 
         showP21Toast(title, message, options = {}) {
+            // CHANGE: Ordinary error/info toasts own the overlay surface exclusively.
+            // Connection setup already removes the preview card in its message handler.
+            this.removeLabelPreviewCard();
             const shadow = this.ensureP21FabHost();
             if (!shadow) return;
 
@@ -686,6 +697,82 @@
             this.p21ToastTimer = setTimeout(() => this.hideP21Toast(), options.durationMs || 12000);
         }
 
+        // CHANGE: A toast-positioned, persistent recovery card for alternate Quick Ship routes.
+        showQuickShipConnectionSetup(configuredBase, options = {}) {
+            const shadow = this.ensureP21FabHost();
+            if (!shadow) return;
+            let toast = shadow.getElementById("qs-p21-toast");
+            if (!toast) {
+                toast = document.createElement("div");
+                toast.id = "qs-p21-toast";
+                toast.className = "qs-p21-toast";
+                shadow.appendChild(toast);
+            }
+            if (this.p21ToastTimer) clearTimeout(this.p21ToastTimer);
+            toast.innerHTML = `
+                <div class="qs-p21-toast-header">
+                    <div class="qs-p21-toast-title">Quick Ship could not be reached</div>
+                    <button class="qs-p21-toast-close" id="qs-connection-close" type="button" aria-label="Dismiss">&times;</button>
+                </div>
+                <div class="qs-connection-copy">
+                    Kinetic is configured to use:
+                    <span class="qs-connection-url"></span>
+                </div>
+                <div class="qs-connection-copy">Enter a Quick Ship address this browser can access.</div>
+                <input id="qs-connection-input" class="qs-connection-input" type="url" placeholder="http://server:port" autocomplete="url">
+                <div id="qs-connection-error" class="qs-connection-error" role="alert"></div>
+                <div class="qs-p21-toast-actions">
+                    <button id="qs-connection-cancel" class="qs-p21-toast-btn" type="button">Cancel</button>
+                    <button id="qs-connection-test" class="qs-p21-toast-btn primary" type="button">Test & Save</button>
+                </div>`;
+            toast.querySelector(".qs-connection-url").textContent = configuredBase || "Unknown address";
+            const input = toast.querySelector("#qs-connection-input");
+            const error = toast.querySelector("#qs-connection-error");
+            const testBtn = toast.querySelector("#qs-connection-test");
+            const close = () => this.hideP21Toast();
+            toast.querySelector("#qs-connection-close").addEventListener("click", close);
+            toast.querySelector("#qs-connection-cancel").addEventListener("click", close);
+            const submit = () => {
+                const candidateBase = String(input.value || "").trim();
+                if (!candidateBase) { error.textContent = "Enter the browser-accessible Quick Ship URL."; input.focus(); return; }
+                error.textContent = "";
+                input.disabled = true;
+                testBtn.disabled = true;
+                testBtn.textContent = "Testing...";
+                chrome.runtime.sendMessage({
+                    type: "saveQuickShipBaseOverride",
+                    configuredBase,
+                    candidateBase,
+                    authHeaders: options.authHeaders || {}
+                }, (result) => {
+                    input.disabled = false;
+                    testBtn.disabled = false;
+                    testBtn.textContent = "Test & Save";
+                    if (chrome.runtime.lastError || !result || !result.success) {
+                        error.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
+                        return;
+                    }
+                    this.hideP21Toast();
+                    this.showLoading("Connected — retrying label preview...", `Using ${result.effectiveBase}`);
+                    if (typeof options.onSaved === "function") options.onSaved(result);
+                });
+            };
+            testBtn.addEventListener("click", submit);
+            input.addEventListener("keydown", event => { if (event.key === "Enter") submit(); });
+            toast.classList.add("qs-p21-toast-visible");
+            setTimeout(() => input.focus(), 0);
+        }
+
+        // Remove the label preview card while a connection recovery card is active, preventing fixed overlays from colliding.
+        removeLabelPreviewCard() {
+            const host = document.getElementById(this.hostId);
+
+            if (host) {
+                host.remove();
+            }
+
+            this.shadowRoot = null;
+        }
         hideP21Toast() {
             const host = document.getElementById("quick-ship-p21-fab-host");
             const toast = host && host.shadowRoot ? host.shadowRoot.getElementById("qs-p21-toast") : null;
@@ -797,10 +884,13 @@
         }
 
         showInfo(msg) {
-            const content = this.shadowRoot.getElementById("qs-content");
-            const status = this.shadowRoot.getElementById("qs-status");
+            // CHANGE: Result cards and toasts are mutually exclusive.
+            this.hideP21Toast();
+            if (!this.shadowRoot || !document.getElementById(this.hostId)) this.renderBase();
+            const content = this.shadowRoot && this.shadowRoot.getElementById("qs-content");
+            const status = this.shadowRoot && this.shadowRoot.getElementById("qs-status");
 
-            if (!content) return;
+            if (!content || !status) return;
 
             status.textContent = "Info";
             status.style.backgroundColor = "#e1f5fe";
@@ -814,10 +904,13 @@
         }
 
         showError(msg) {
-            const content = this.shadowRoot.getElementById("qs-content");
-            const status = this.shadowRoot.getElementById("qs-status");
+            // CHANGE: All errors render as one ERROR preview card; dismiss any toast first.
+            this.hideP21Toast();
+            if (!this.shadowRoot || !document.getElementById(this.hostId)) this.renderBase();
+            const content = this.shadowRoot && this.shadowRoot.getElementById("qs-content");
+            const status = this.shadowRoot && this.shadowRoot.getElementById("qs-status");
 
-            if (!content) return;
+            if (!content || !status) return;
 
             status.textContent = "Error";
             status.style.backgroundColor = "#ffebee";
@@ -934,8 +1027,8 @@
         const severityType = String((failureInfo && failureInfo.severityType) || "ERROR").toUpperCase();
         const title = severityType === "WARNING" ? "Shipment Warning" : "Shipment Failed";
         const message = normalizeShipmentFailureMessage(failureInfo, shipmentNumber);
+        // CHANGE: Render shipment failure once as an error card; do not duplicate it in a toast.
         ui.showError(message);
-        ui.showP21Toast(title, message, { durationMs: 18000 });
         console.warn("[Quick Ship] Label preview blocked from ShipShipment failure context:", {
             shipmentNumber,
             severityType,
@@ -1008,24 +1101,28 @@
 
         ui.removeP21Fab();
         ui.showLoading();
-        chrome.runtime.sendMessage({
-            type: "previewKineticLabel",
-            livePreviewStartedAt: context.freightStartedAt || latestKineticFreightStartedAt || Date.now(),
-            packID: shipmentNumber,
-            shipmentNumber,
-            mfTransNum: shipmentNumber,
-            kineticPackID,
-            baseUrl: quickShipBaseUrl,
-            freightURL: context.freightURL,
-            authHeaders: context.quickShipAuthHeaders || {}
-        }, () => {
-            if (chrome.runtime.lastError) {
-                const message = chrome.runtime.lastError.message || "Failed to request Kinetic label preview.";
-                console.error("[Quick Ship] Kinetic label preview message failed:", message);
-                ui.removeP21Fab();
-                ui.showP21Toast("Kinetic Label Preview Failed", message, { onRetry: requestKineticLabelPreview });
-            }
-        });
+        // CHANGE: previewKineticLabel is fire-and-forget. Do not provide a response
+        // callback, because the background listener intentionally returns false and
+        // completes through labelPreview/quickShipConnectionRequired messages later.
+        // A callback here causes Chrome's harmless "message port closed" warning.
+        try {
+            chrome.runtime.sendMessage({
+                type: "previewKineticLabel",
+                livePreviewStartedAt: context.freightStartedAt || latestKineticFreightStartedAt || Date.now(),
+                packID: shipmentNumber,
+                shipmentNumber,
+                mfTransNum: shipmentNumber,
+                kineticPackID,
+                baseUrl: quickShipBaseUrl,
+                freightURL: context.freightURL,
+                authHeaders: context.quickShipAuthHeaders || {}
+            });
+        } catch (err) {
+            const message = err && err.message ? err.message : "Failed to request Kinetic label preview.";
+            console.error("[Quick Ship] Kinetic label preview message failed:", message);
+            ui.hideP21Toast();
+            ui.showError(message);
+        }
     }
 
     async function requestP21PackingListPreview() {
@@ -1050,20 +1147,23 @@
 
         ui.setP21FabState("loading", "Checking...");
 
-        chrome.runtime.sendMessage({
-            type: "previewP21PackingList",
-            shipmentNumber,
-            erpNumber: context.erpNumber,
-            baseUrl,
-            authHeaders: context.authHeaders || {}
-        }, () => {
-            if (chrome.runtime.lastError) {
-                const message = chrome.runtime.lastError.message || "Failed to request P21 packing list preview.";
-                console.error("[Quick Ship] P21 FAB message failed:", message);
-                ui.setP21FabState("retry", "Try Again");
-                ui.showP21Toast("P21 Preview Request Failed", message, { onRetry: requestP21PackingListPreview });
-            }
-        });
+        // CHANGE: P21 preview also reports completion through p21PreviewResult,
+        // so no sendMessage response callback should hold open a message port.
+        try {
+            chrome.runtime.sendMessage({
+                type: "previewP21PackingList",
+                shipmentNumber,
+                erpNumber: context.erpNumber,
+                baseUrl,
+                authHeaders: context.authHeaders || {}
+            });
+        } catch (err) {
+            const message = err && err.message ? err.message : "Failed to request P21 packing list preview.";
+            console.error("[Quick Ship] P21 FAB message failed:", message);
+            ui.setP21FabState("retry", "Try Again");
+            ui.hideP21Toast();
+            ui.showError(message);
+        }
     }
 
     function attachP21FabHandler() {
@@ -1071,7 +1171,7 @@
             ui.removeP21Fab();
             return;
         }
-        
+
         if (!isP21ShipmentContext(latestShipmentContext)) {
             ui.removeP21Fab();
             console.log("[Quick Ship] Blocked P21 FAB render outside P21 context.", {
@@ -1277,6 +1377,19 @@
                 ui.showLoading();
                 sendResponse({ success: true });
                 return;
+            } else if (msg.type === "quickShipConnectionRequired") {
+                const context = latestKineticLabelContext || {};
+                const configuredBase = msg.configuredBase || context.quickShipBaseUrl || context.baseUrl || "";
+                ui.removeLabelPreviewCard();
+                ui.showQuickShipConnectionSetup(configuredBase, {
+                    authHeaders: context.quickShipAuthHeaders || {},
+                    onSaved: () => {
+                        latestKineticAutoPreviewKey = null;
+                        requestKineticLabelPreview();
+                    }
+                });
+                sendResponse?.({ success: true });
+                return;
             } else if (msg.type === "p21PreviewResult") {
                 if (msg.success) {
                     ui.hideP21Toast();
@@ -1293,14 +1406,16 @@
                 }
             } else if (msg.type === "labelPreview") {
                 try {
+                    // CHANGE: A label result owns the preview surface exclusively.
+                    // Shipment/technical failures are errors even if isNoData is also true.
+                    ui.hideP21Toast();
                     if (msg.success) {
                         ui.showImage(msg.images);
+                    } else if (msg.category === "shipment_failed" || msg.severityType === "ERROR") {
+                        console.error("[Quick Ship] Shipment Error:", msg.error);
+                        ui.showError(msg.error || "The shipment failed in Quick Ship.");
                     } else if (msg.isNoData) {
-                        // Show a friendly invalid-selection explanation for manual Preview attempts.
-                        const title = msg.title || "Nothing to Preview";
-                        const message = msg.error || "The selected text does not contain supported preview data.";
-                        ui.showInfo(message);
-                        ui.showP21Toast(title, message, { durationMs: 14000 });
+                        ui.showInfo(msg.error || "The selected text does not contain supported preview data.");
                     } else {
                         console.error("[Quick Ship] Label Generation Error:", msg.error);
                         ui.showError(msg.error || "Failed to generate label.");

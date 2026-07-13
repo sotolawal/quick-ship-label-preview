@@ -353,10 +353,17 @@
             border: 1px solid #d93025;
         }
 
-        .modal-btn.delete:hover {
-            background: #b21f16;
-            border-color: #b21f16;
-        }
+        .modal-btn.delete:hover { background: #b21f16; border-color: #b21f16; }
+        /* CHANGE: Quick Ship connection mapping manager. */
+        .connection-field { margin: 12px 0; }
+        .connection-label { display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 5px; }
+        .connection-input { width: 100%; box-sizing: border-box; padding: 8px 9px; border: 1px solid #cbd5e1; border-radius: 5px; font: inherit; outline: none; }
+        .connection-input:focus { border-color: #0d6da0; box-shadow: 0 0 0 2px rgba(13,109,160,.12); }
+        .connection-list { max-height: 145px; overflow-y: auto; margin: 10px 0; }
+        .connection-row { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; margin-bottom: 7px; font-size: 11px; line-height: 1.4; }
+        .connection-row code { display: block; overflow-wrap: anywhere; color: #334155; }
+        .connection-remove { margin-top: 6px; border: none; background: transparent; color: #c62828; padding: 0; cursor: pointer; font: inherit; font-weight: 600; }
+        .connection-status { min-height: 18px; font-size: 12px; color: #475569; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -375,6 +382,10 @@
                         <span>Hide P21 Button</span><span id="p21-fab-status" class="menu-status">Visible</span>
                     </button>
                     <button id="p21-fab-reset-btn" class="menu-item" type="button" role="menuitem">Reset P21 Button Position</button>
+                    <div class="menu-divider"></div>
+                    <button id="quick-ship-connections-btn" class="menu-item" type="button" role="menuitem">
+                        <span>Quick Ship Connections</span><span class="menu-status">Manage</span>
+                    </button>
                     <div class="menu-divider"></div>
                     <button id="delete-all-btn" class="menu-item danger" type="button" role="menuitem">Clear Recent Shipments</button>
                 </div>
@@ -409,6 +420,27 @@
         </div>
     </div>
 
+    <!-- CHANGE: Quick Ship connection mappings modal -->
+    <div id="connections-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">Quick Ship Connections</div>
+            <div class="modal-body" style="margin-bottom:10px;">Map the address configured in Kinetic to an address this browser can reach.</div>
+            <div id="connections-list" class="connection-list"></div>
+            <div class="connection-field">
+                <label class="connection-label" for="configured-base-input">Kinetic address</label>
+                <input id="configured-base-input" class="connection-input" placeholder="http://qs-server">
+            </div>
+            <div class="connection-field">
+                <label class="connection-label" for="accessible-base-input">Browser-accessible address</label>
+                <input id="accessible-base-input" class="connection-input" placeholder="http://10.0.0.10:222">
+            </div>
+            <div id="connections-status" class="connection-status"></div>
+            <div class="modal-footer">
+                <button id="connections-close-btn" class="modal-btn cancel">Close</button>
+                <button id="connections-save-btn" class="modal-btn" style="background:#0d6da0;color:#fff;">Test & Save</button>
+            </div>
+        </div>
+    </div>
     <!-- Error Modal -->
     <div id="error-modal" class="modal-overlay">
         <div class="modal-content">
