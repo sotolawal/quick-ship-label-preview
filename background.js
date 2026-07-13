@@ -262,17 +262,43 @@ function getShipmentFailureInfo(data) {
             : undefined;
 
     const failureSeverityTypes = new Set(["ERROR", "ERR", "FATAL", "CRITICAL"]);
+    const warningSeverityTypes = new Set(["WARNING", "WARN", "INFORMATION", "INFO"]);
     const hasFailureSeverity = failureSeverityTypes.has(severity);
+    const hasWarningSeverity = warningSeverityTypes.has(severity);
     const hasExplicitFailure = isSuccess === false;
     const blockingMessages = getBlockingShipmentErrorMessages(errorMessages);
     const hasBlockingErrors = blockingMessages.length > 0;
 
-    // Quick Ship can return errors: [{ message: "Success" }] on successful shipments.
-    // Only block when the envelope says failure, notification severity is failure, or error messages are not benign.
-    if (!hasFailureSeverity && !hasExplicitFailure && !hasBlockingErrors) return null;
+    // CHANGE: Explicit failure signals always win. A warning can contain entries in
+    // Quick Ship's errors/messages array without preventing shipment completion.
+    if (hasExplicitFailure || hasFailureSeverity) {
+        return {
+            severityType: severity || "ERROR",
+            message: notificationMessage || blockingMessages.join("\n") || "Quick Ship returned a shipment failure.",
+            errors: errorMessages,
+            notification
+        };
+    }
+
+    // CHANGE: Successful responses and WARNING/INFO notifications are non-blocking.
+    // Continue resolving the label while retaining the warning in the service-worker log.
+    if (isSuccess === true || hasWarningSeverity) {
+        if (notificationMessage || hasBlockingErrors) {
+            console.warn("[Quick Ship] Shipment completed with a non-blocking warning:", {
+                severityType: severity || "WARNING",
+                message: notificationMessage || blockingMessages.join("\n"),
+                errors: errorMessages
+            });
+        }
+        return null;
+    }
+
+    // Legacy responses may omit both isSuccess and severity. Preserve fail-safe
+    // behavior only when an ambiguous response contains a non-benign message.
+    if (!hasBlockingErrors) return null;
 
     return {
-        severityType: severity || (hasExplicitFailure || hasBlockingErrors ? "ERROR" : "UNKNOWN"),
+        severityType: severity || "ERROR",
         message: notificationMessage || blockingMessages.join("\n") || "Quick Ship returned a shipment failure.",
         errors: errorMessages,
         notification
