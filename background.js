@@ -360,6 +360,74 @@ async function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// CHANGE: Labelary can rate-limit a burst of otherwise sequential requests.
+// Retry transient failures with backoff while preserving Labelary's response in the logs.
+async function renderZplWithRetry(zpl, headers, signal = null, options = {}) {
+    const url = "https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0";
+    const maxAttempts = Number(options.maxAttempts || 4);
+    const baseDelayMs = Number(options.baseDelayMs || 1500);
+    const documentIndex = Number(options.documentIndex || 0);
+    const documentTotal = Number(options.documentTotal || 0);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (signal && signal.aborted) {
+            throw new DOMException("The operation was aborted.", "AbortError");
+        }
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers,
+            body: zpl,
+            signal: signal || undefined
+        });
+
+        if (response.ok) {
+            if (attempt > 1) {
+                console.log("[Quick Ship] Labelary retry succeeded:", {
+                    documentIndex,
+                    documentTotal,
+                    attempt
+                });
+            }
+            return response;
+        }
+
+        const responseText = await response.text();
+        const isRateLimited = response.status === 429 || /rate limit exceeded/i.test(responseText);
+        const isRetryable = isRateLimited || response.status === 408 || response.status >= 500;
+
+        console.warn("Labelary failed for one label", {
+            documentIndex,
+            documentTotal,
+            attempt,
+            maxAttempts,
+            status: response.status,
+            statusText: response.statusText,
+            error: responseText
+        });
+
+        if (!isRetryable || attempt === maxAttempts) return null;
+
+        // Respect Retry-After when supplied; otherwise use progressive backoff.
+        const retryAfter = Number(response.headers.get("Retry-After"));
+        const retryDelayMs = Number.isFinite(retryAfter) && retryAfter > 0
+            ? retryAfter * 1000
+            : baseDelayMs * attempt;
+
+        console.log("[Quick Ship] Waiting before Labelary retry:", {
+            documentIndex,
+            documentTotal,
+            retryDelayMs
+        });
+        if (typeof options.onRetryWait === "function") {
+            options.onRetryWait({ documentIndex, documentTotal, attempt, retryDelayMs });
+        }
+        await sleep(retryDelayMs);
+    }
+
+    return null;
+}
+
 function addLookupClue(clues, value) {
     const normalized = normalizeLookupValue(value);
     if (!normalized) return;
@@ -691,9 +759,22 @@ function tryDecodeBase64Text(text) {
     }
 }
 
+// CHANGE: Send processing updates to the popup when clipboard preview is active.
+function sendLabelProcessingProgress(tabId, message, detail = "") {
+    if (!tabId) return;
+    chrome.tabs.sendMessage(tabId, {
+        type: "labelProcessing",
+        message,
+        detail
+    }).catch(() => {
+        // The page or content script may have closed; processing should continue.
+    });
+}
+
 /* Shared logic to extract, convert, and display label data from raw text/xml/json. */
 async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, signal = null) {
     try {
+        sendLabelProcessingProgress(tabId, "Analyzing label data...", "Looking for labels, forms, images, and ZPL documents.");
         // Use helper from utils.js to find base64 data
         const extracted = extractLabelData(fileContent);
         if (!extracted) {
@@ -707,7 +788,12 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         const dataList = Array.isArray(rawData) ? rawData : [rawData];
         const processedImages = [];
 
-        for (const base64 of dataList) {
+        for (const [dataIndex, base64] of dataList.entries()) {
+            sendLabelProcessingProgress(
+                tabId,
+                `Processing document ${dataIndex + 1} of ${dataList.length}...`,
+                "ZPL documents may pause briefly while the renderer observes its request limit."
+            );
             let isPdf = false;
             let isPng = false;
             let isJpg = false;
@@ -783,22 +869,38 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                         break;
                 }
 
-                const labelaryResp = await fetch("https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0", {
-                    method: "POST",
-                    headers: labelaryHeaders,
-                    body: zpl,
-                    signal: signal || undefined
-                });
+                // CHANGE: Retry Labelary rate limits instead of silently losing the document.
+                const labelaryResp = await renderZplWithRetry(
+                    zpl,
+                    labelaryHeaders,
+                    signal,
+                    {
+                        documentIndex: dataIndex + 1,
+                        documentTotal: dataList.length,
+                        maxAttempts: 4,
+                        baseDelayMs: 1500,
+                        onRetryWait: ({ documentIndex, documentTotal, retryDelayMs }) => {
+                            sendLabelProcessingProgress(
+                                tabId,
+                                `Renderer is busy — retrying document ${documentIndex} of ${documentTotal}...`,
+                                `Waiting ${Math.ceil(retryDelayMs / 1000)} second${retryDelayMs > 1000 ? "s" : ""} before retrying.`
+                            );
+                        }
+                    }
+                );
 
-                if (labelaryResp.ok) {
+                if (labelaryResp) {
                     const pngBlob = await labelaryResp.blob();
                     const b64png = await blobToBase64(pngBlob);
                     processedImages.push({
                         src: b64png,
                         type: "image/png"
                     });
-                } else {
-                    console.warn("Labelary failed for one label", await labelaryResp.text());
+                }
+
+                // CHANGE: Pace successful requests too, preventing another immediate burst.
+                if (dataIndex < dataList.length - 1) {
+                    await sleep(1000);
                 }
             }
         }
@@ -817,6 +919,8 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         } catch (e) {
             website = baseUrl;
         }
+
+        sendLabelProcessingProgress(tabId, "Finalizing preview...", `Prepared ${processedImages.length} document${processedImages.length === 1 ? "" : "s"}.`);
 
         // Save to History
         await saveToHistory({

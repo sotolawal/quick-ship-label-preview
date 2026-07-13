@@ -692,17 +692,41 @@
             if (toast) toast.classList.remove("qs-p21-toast-visible");
         }
 
-        showLoading() {
+        showLoading(message = "Fetching label data...", detail = "") {
             const root = this.renderBase();
             if (!root) return;
             const { content, status } = root;
             status.textContent = "Generating";
             content.innerHTML = `
-                <div class="qs-loading">
+                <div class="qs-loading" role="status" aria-live="polite" aria-atomic="true">
                     <div class="qs-spinner"></div>
-                    <span>Fetching label data...</span>
+                    <span id="qs-loading-message">${message}</span>
+                    <span id="qs-loading-detail" style="font-size:12px;color:#7a7a7a;text-align:center;line-height:1.4;${detail ? "" : "display:none;"}">${detail}</span>
                 </div>
             `;
+        }
+
+        // CHANGE: Update the active on-page loading card without recreating it.
+        updateLoading(message = "Processing label data...", detail = "") {
+            const host = document.getElementById(this.hostId);
+            const shadow = host && host.shadowRoot;
+            const content = shadow && shadow.getElementById("qs-content");
+            const status = shadow && shadow.getElementById("qs-status");
+
+            // If the loading card is not currently visible, create it first.
+            if (!content || !content.querySelector(".qs-loading")) {
+                this.showLoading(message, detail);
+                return;
+            }
+
+            const messageEl = shadow.getElementById("qs-loading-message");
+            const detailEl = shadow.getElementById("qs-loading-detail");
+            if (status) status.textContent = "Processing";
+            if (messageEl) messageEl.textContent = message;
+            if (detailEl) {
+                detailEl.textContent = detail;
+                detailEl.style.display = detail ? "inline" : "none";
+            }
         }
 
         showImage(images) {
@@ -1235,7 +1259,15 @@
     // Listen for responses from Background Script
     try {
         chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-            if (msg.type === "startLoading") {
+            if (msg.type === "labelProcessing") {
+                // CHANGE: Live progress from background/Labelary appears in the on-page card.
+                ui.updateLoading(
+                    msg.message || "Processing label data...",
+                    msg.detail || ""
+                );
+                sendResponse?.({ success: true });
+                return;
+            } else if (msg.type === "startLoading") {
                 // Check if we can render UI
                 if (document.contentType && !["text/html", "application/xhtml+xml"].includes(document.contentType)) {
                     // Cannot render on XML/Text
