@@ -75,6 +75,10 @@ chrome.runtime.onMessage.addListener(async (msg, sender) => {
             baseUrl: msg.baseUrl,
             freightURL: msg.freightURL,
             authHeaders: msg.authHeaders || {},
+            // CHANGE: Preserve the Kinetic REST response when the content script supplies it.
+            // Newer responses expose the Quick Ship lookup key as
+            // returnObj.FreightCartonResponseTracking[].PackID.
+            kineticResponse: msg.kineticResponse || msg.responseBody || msg.response || msg.data || msg.returnObj || null,
             tabId
         });
     } else if (msg.type === "previewP21PackingList") {
@@ -1033,7 +1037,34 @@ async function cleanupOldViewerPreviews(maxAgeMs = 60 * 60 * 1000) {
 }
 
 
-async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, kineticPackID, baseUrl, freightURL, authHeaders = {}, tabId, livePreviewStartedAt = Date.now() }) {
+// CHANGE: Resolve the lookup value from the new Kinetic REST response shape.
+// FreightCartonResponse.TransactionNumber remains useful as a legacy fallback, but
+// FreightCartonResponseTracking.PackID is now the key used to locate CarrierXML files.
+function extractKineticTrackingPackID(value) {
+    if (!value) return null;
+
+    let root = value;
+    if (typeof root === "string") root = parsePossiblyNestedJson(root);
+    if (!root || typeof root !== "object") return null;
+
+    let resolvedPackID = null;
+    walkJson(root, (node) => {
+        if (resolvedPackID || !node || typeof node !== "object" || Array.isArray(node)) return;
+        const trackingRows = findCaseInsensitive(node, "FreightCartonResponseTracking");
+        if (!Array.isArray(trackingRows)) return;
+
+        for (const row of trackingRows) {
+            const candidate = normalizeLookupValue(findCaseInsensitive(row, "PackID"));
+            if (candidate) {
+                resolvedPackID = candidate;
+                break;
+            }
+        }
+    });
+    return resolvedPackID;
+}
+
+async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, kineticPackID, baseUrl, freightURL, authHeaders = {}, kineticResponse = null, tabId, livePreviewStartedAt = Date.now() }) {
     const sendKineticError = (message, details = {}) => {
         if (!tabId) return;
         chrome.tabs.sendMessage(tabId, {
@@ -1045,7 +1076,12 @@ async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, k
     };
 
     try {
-        const cleanLookupNumber = String(shipmentNumber || mfTransNum || packID || "").trim();
+        // CHANGE: Prefer FreightCartonResponseTracking.PackID (for example, 1188)
+        // instead of FreightCartonResponse.TransactionNumber (for example, 288).
+        const responseTrackingPackID = extractKineticTrackingPackID(kineticResponse);
+        const cleanLookupNumber = String(
+            responseTrackingPackID || kineticPackID || packID || shipmentNumber || mfTransNum || ""
+        ).trim();
         const cleanBase = String(baseUrl || getQuickShipBaseFromFreightUrl(freightURL) || "").replace(/\/$/, "");
         if (!cleanLookupNumber || cleanLookupNumber === "0") {
             throw new Error("Unable to determine the Quick Ship shipment number / MFTransNum for this Kinetic shipment.");
@@ -1056,7 +1092,14 @@ async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, k
 
         console.log("[Quick Ship] Kinetic label lookup using Quick Ship shipment number:", {
             lookupNumber: cleanLookupNumber,
+            lookupSource: responseTrackingPackID
+                ? "FreightCartonResponseTracking.PackID"
+                : (kineticPackID || packID)
+                    ? "Kinetic PackID"
+                    : "legacy TransactionNumber / MFTransNum",
+            responseTrackingPackID,
             kineticPackID: kineticPackID || packID || null,
+            legacyTransactionNumber: shipmentNumber || mfTransNum || null,
             baseUrl: cleanBase
         });
         await handlePackID(cleanLookupNumber, cleanBase, tabId, authHeaders || {}, null, {
