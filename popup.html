@@ -68,7 +68,6 @@
             fill: currentColor;
         }
 
-        /* --- Search Bar (Dropdown/Slide-in) --- */
         .search-bar {
             background: white;
             border-bottom: 1px solid #e0e0e0;
@@ -94,7 +93,7 @@
 
         .search-input {
             width: 100%;
-            padding: 8px 36px 8px 12px; /* right padding for clear icon */
+            padding: 8px 36px 8px 12px; 
             border: 1px solid #dadce0;
             border-radius: 4px;
             font-family: inherit;
@@ -119,7 +118,6 @@
             color: #5f6368;
         }
 
-        /* --- List --- */
         .history-list {
             padding: 10px;
             display: flex;
@@ -230,14 +228,13 @@
         }
         
         mark {
-            background-color: #fff9c4; /* Light yellow */
+            background-color: #fff9c4;
             color: #202124;
             padding: 0 1px;
             border-radius: 2px;
             font-weight: 600;
         }
 
-        /* Scrollbar styling */
         ::-webkit-scrollbar {
             width: 8px;
         }
@@ -252,8 +249,6 @@
             background: #a8a8a8; 
         }
 
-
-        /* --- Overflow Menu --- */
         .menu-wrapper { position: relative; }
         .overflow-menu {
             position: absolute; top: 38px; right: 0; min-width: 220px;
@@ -270,7 +265,7 @@
         .menu-item.danger:hover { background: #fce8e6; color: #d93025; }
         .menu-divider { height: 1px; background: #e5e7eb; margin: 6px 4px; }
         .menu-status { font-size: 11px; color: #64748b; font-weight: 600; }
-        /* --- Modal --- */
+
         .modal-overlay {
             position: fixed;
             top: 0;
@@ -354,7 +349,7 @@
         }
 
         .modal-btn.delete:hover { background: #b21f16; border-color: #b21f16; }
-        /* --- Quick Ship connection mapping manager --- */
+  
         #connections-modal .modal-content {
             width: 318px;
             max-height: 92vh;
@@ -406,7 +401,7 @@
         .connection-summary-actions { display: flex; align-items: center; gap: 4px; }
         .connection-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
         .connection-status-dot.connected { background: #168316; }
-        .connection-status-dot.failed { background: #c62828; }
+        .connection-status-dot.failed { background: #b21f16; }
         .connection-chevron { color: #64748b; transition: transform .18s ease; }
         .connection-card.open .connection-chevron { transform: rotate(180deg); }
         .connection-details { display: grid; grid-template-rows: 0fr; border-top: 0 solid #edf0f2; transition: grid-template-rows .2s ease, border-width .2s; }
@@ -423,8 +418,8 @@
         .connection-test-status { min-width: 0; color: #64748b; font-size: 10.5px; }
         .connection-icon-actions { display: flex; gap: 3px; }
         .connection-icon-btn { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #64748b; cursor: pointer; }
-        .connection-icon-btn:hover { border-color: #d8dee4; background: #f1f5f9; color: #1f2933; }
-        .connection-icon-btn.danger:hover { border-color: #f2b8b5; background: #fce8e6; color: #c62828; }
+        .connection-icon-btn:hover { border-radius: 50%;background: #f1f5f9; color: #1f2933; }
+        .connection-icon-btn.danger:hover { border-radius: 50%; background: #fce8e6; color: #b21f16; }
         .connection-icon-btn:disabled { opacity: .45; cursor: wait; }
         .connections-footer { display: flex; justify-content: space-between; gap: 8px; padding: 12px 14px; border-top: 1px solid #e5e7eb; background: #fafafa; }
         .connections-add-btn { display: inline-flex; align-items: center; gap: 6px; }
@@ -438,7 +433,7 @@
         .connection-input:focus { border-color: #0d6da0; box-shadow: 0 0 0 2px rgba(13,109,160,.12); }
         .connection-status { min-height: 18px; margin-top: 7px; color: #475569; font-size: 11px; }
         .connection-status.success { color: #168316; }
-        .connection-status.error { color: #c62828; }
+        .connection-status.error { color: #b21f16; }
     </style>
 </head>
 <body>
@@ -478,10 +473,10 @@
     </div>
 
     <div class="history-list" id="history-list">
-        <!-- Items injected here -->
+
     </div>
 
-    <!-- Confirmation Modal -->
+   
     <div id="confirmation-modal" class="modal-overlay">
         <div class="modal-content">
             <div class="modal-header">Clear History?</div>
@@ -495,13 +490,13 @@
         </div>
     </div>
 
-    <!-- Quick Ship connection mappings modal -->
+
     <div id="connections-modal" class="modal-overlay">
         <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="connections-title">
             <div id="connections-list-view" class="connection-list-view">
                 <div class="connections-header">
                     <div id="connections-title" class="modal-header">Quick Ship Connections</div>
-                    <p class="connections-description">Map Quick Ship addresses to IP addresses this browser can reach.</p>
+                    <p class="connections-description">Map your Quick Ship sites to IP addresses this browser can reach.</p>
                 </div>
                 <div id="connections-list" class="connection-list"></div>
                 <div class="connections-footer">
@@ -537,7 +532,7 @@
             </div>
         </div>
     </div>
-    <!-- Error Modal -->
+   
     <div id="error-modal" class="modal-overlay">
         <div class="modal-content">
             <div class="modal-header" id="error-modal-title">Error</div>
