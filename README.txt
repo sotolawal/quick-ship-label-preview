@@ -1,14 +1,16 @@
 Quick Ship Label Preview
-Release version 2.0
+Release version 2.5
 
 What's New
-- Added automatic label preview support for Kinetic.
-- Added P21 Packing List preview for Prophet 21 Quick Ship shipments.
-- Improved the document preview experience and preview tab.
+- Added Quick Ship website name mappings to IP addresses to allow label previews outside of VMs. 
+- Added throttling to comply with Labelary rate limits when previewing several labels at once. 
 
 
 What This Does
 This extension helps preview shipping-related documents from Quick Ship. It can preview labels as shipments are processed, preview copied label data, store recent previews, and provide a manual P21 Packing List preview option when available.
+
+Important Requirement
+        Quick Ship must have the GenerateXML app setting enabled.
 
 Key Features
 1. Quick Ship label preview
@@ -26,8 +28,6 @@ Key Features
 5. Label history
         Saves recent label previews for quick access.
 
-Important Requirement
-        Quick Ship must have the GenerateXML app setting enabled.
 
 Supported Browsers
         Chrome, Microsoft Edge and other chromium browsers such as Brave, Opera, and Vivaldi

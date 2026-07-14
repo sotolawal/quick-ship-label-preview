@@ -146,6 +146,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // --- Quick Ship Connections ---
     const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
+    const QUICK_SHIP_TEST_STATE_STORAGE_KEY = "quickShipConnectionTestStates";
     const connectionIcons = {
         server: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/><path d="M8 6.5h.01M8 17.5h.01M12 10v4"/></svg>',
         monitor: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
@@ -188,9 +189,38 @@ document.addEventListener("DOMContentLoaded", async () => {
         return { ...(stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {}) };
     }
 
+    async function getConnectionTestStates() {
+        const stored = await chrome.storage.local.get(QUICK_SHIP_TEST_STATE_STORAGE_KEY);
+        return { ...(stored[QUICK_SHIP_TEST_STATE_STORAGE_KEY] || {}) };
+    }
+
+    async function saveConnectionTestState(configured, state, message = "") {
+        const states = await getConnectionTestStates();
+        states[configured] = {
+            state,
+            message,
+            testedAt: Date.now()
+        };
+        await chrome.storage.local.set({ [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: states });
+        return states[configured];
+    }
+
+    function formatConnectionTestState(testState) {
+        if (!testState || !testState.testedAt) return "Not tested";
+        const tested = new Date(testState.testedAt);
+        if (Number.isNaN(tested.getTime())) return testState.message || "Not tested";
+        const dateText = tested.toLocaleDateString([], { month: "short", day: "numeric" });
+        const timeText = tested.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        if (testState.state === "connected") return `Connected · ${dateText} at ${timeText}`;
+        return testState.message ? `Failed · ${dateText} at ${timeText}` : `Test failed · ${dateText} at ${timeText}`;
+    }
+
     async function renderConnectionMappings(openConfigured = null) {
         if (!connectionsList) return;
-        const mappings = await getConnectionMappings();
+        const [mappings, testStates] = await Promise.all([
+            getConnectionMappings(),
+            getConnectionTestStates()
+        ]);
         connectionsList.replaceChildren();
         const entries = Object.entries(mappings);
         if (!entries.length) {
@@ -229,8 +259,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             const summaryActions = document.createElement("span");
             summaryActions.className = "connection-summary-actions";
             const statusDot = document.createElement("span");
+            const savedTestState = testStates[configured];
             statusDot.className = "connection-status-dot";
-            statusDot.title = "Not tested this session";
+            if (savedTestState?.state === "connected") statusDot.classList.add("connected");
+            if (savedTestState?.state === "failed") statusDot.classList.add("failed");
+            statusDot.title = savedTestState?.state === "connected"
+                ? "Last test succeeded"
+                : savedTestState?.state === "failed" ? "Last test failed" : "Not tested";
             const chevron = document.createElement("span");
             chevron.innerHTML = connectionIcons.chevron;
             summaryActions.append(statusDot, chevron);
@@ -262,17 +297,18 @@ document.addEventListener("DOMContentLoaded", async () => {
                 route.append(node, copy);
             }
 
-            appendRoute(connectionIcons.monitor, "Kinetic address", configured);
+            appendRoute(connectionIcons.monitor, "Quick Ship Website", configured);
             const routeLine = document.createElement("span");
             routeLine.className = "connection-route-line";
             route.append(routeLine, document.createElement("span"));
-            appendRoute(connectionIcons.link, "Accessible at", effective);
+            appendRoute(connectionIcons.link, "Browser-accessible IP Address", effective);
 
             const footer = document.createElement("div");
             footer.className = "connection-card-footer";
             const testStatus = document.createElement("span");
             testStatus.className = "connection-test-status";
-            testStatus.textContent = "Not tested this session";
+            testStatus.textContent = formatConnectionTestState(savedTestState);
+            if (savedTestState?.message) testStatus.title = savedTestState.message;
             const actions = document.createElement("span");
             actions.className = "connection-icon-actions";
             const testBtn = makeIconButton(connectionIcons.test, "Test connection");
@@ -296,25 +332,37 @@ document.addEventListener("DOMContentLoaded", async () => {
                 testBtn.disabled = true;
                 testStatus.textContent = "Testing…";
                 statusDot.className = "connection-status-dot";
-                chrome.runtime.sendMessage({ type: "saveQuickShipBaseOverride", configuredBase: configured, candidateBase: effective }, result => {
+                chrome.runtime.sendMessage({ type: "saveQuickShipBaseOverride", configuredBase: configured, candidateBase: effective }, async result => {
                     testBtn.disabled = false;
                     if (chrome.runtime.lastError || !result || !result.success) {
+                        const errorMessage = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
+                        const savedState = await saveConnectionTestState(configured, "failed", errorMessage);
                         statusDot.className = "connection-status-dot failed";
-                        statusDot.title = "Test failed";
-                        testStatus.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
+                        statusDot.title = "Last test failed";
+                        testStatus.textContent = formatConnectionTestState(savedState);
+                        testStatus.title = errorMessage;
                         return;
                     }
+                    const savedState = await saveConnectionTestState(configured, "connected");
                     statusDot.className = "connection-status-dot connected";
-                    statusDot.title = "Connected";
-                    testStatus.textContent = "Connected · tested just now";
+                    statusDot.title = "Last test succeeded";
+                    testStatus.textContent = formatConnectionTestState(savedState);
+                    testStatus.removeAttribute("title");
                 });
             });
 
             editBtn.addEventListener("click", () => showConnectionForm(configured, effective));
             removeBtn.addEventListener("click", async () => {
-                const latest = await getConnectionMappings();
+                const [latest, testStates] = await Promise.all([
+                    getConnectionMappings(),
+                    getConnectionTestStates()
+                ]);
                 delete latest[configured];
-                await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest });
+                delete testStates[configured];
+                await chrome.storage.local.set({
+                    [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
+                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
+                });
                 await renderConnectionMappings();
             });
         }
@@ -379,11 +427,19 @@ document.addEventListener("DOMContentLoaded", async () => {
                 return;
             }
             if (editingConfiguredBase && editingConfiguredBase !== configuredBase) {
-                const latest = await getConnectionMappings();
+                const [latest, testStates] = await Promise.all([
+                    getConnectionMappings(),
+                    getConnectionTestStates()
+                ]);
                 delete latest[editingConfiguredBase];
+                delete testStates[editingConfiguredBase];
                 latest[configuredBase] = candidateBase;
-                await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest });
+                await chrome.storage.local.set({
+                    [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
+                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
+                });
             }
+            await saveConnectionTestState(configuredBase, "connected");
             connectionsStatus.classList.add("success");
             connectionsStatus.textContent = "Connected and saved.";
             await renderConnectionMappings(configuredBase);
