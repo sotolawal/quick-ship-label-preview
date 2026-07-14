@@ -1010,10 +1010,11 @@
 
 
     function normalizeShipmentFailureMessage(failureInfo, shipmentNumber) {
-        const rawMessage = String((failureInfo && failureInfo.message) || "").trim();
-        const cleanedMessage = rawMessage.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-        const prefix = shipmentNumber ? `Shipment ${shipmentNumber} failed in Quick Ship.` : "The shipment failed in Quick Ship.";
-        return cleanedMessage ? `${prefix}\n\n${cleanedMessage}` : `${prefix}\n\nReview the Quick Ship shipment error and try again after it is resolved.`;
+        //const rawMessage = String((failureInfo && failureInfo.message) || "").trim();
+        //const cleanedMessage = rawMessage.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+        const prefix = shipmentNumber ? `Shipment ${shipmentNumber} was not successful.` : "The shipment failed in Quick Ship.";
+        //return cleanedMessage ? `${prefix}\n\n${cleanedMessage}` : `${prefix}\n\nReview the Quick Ship shipment error and try again after it is resolved.`;
+        return `${prefix}\n\n Please review the error and try again.`;
     }
 
     function showShipmentFailurePreview(failureInfo, shipmentNumber) {
