@@ -3,7 +3,7 @@ Release version 2.5
 
 What's New
 - Added Quick Ship website name mappings to IP addresses to allow label previews outside of VMs. 
-- Added throttling to comply with Labelary rate limits when previewing several labels at once. 
+- Added throttling to comply with Labelary rate limits when previewing several labels/documents at once. 
 
 
 What This Does
