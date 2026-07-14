@@ -556,7 +556,6 @@
                 .qs-p21-toast-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
                 .qs-p21-toast-btn { border: 1px solid #bad7e8; background: #fff; color: #0d6da0; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
                 .qs-p21-toast-btn:hover { background: #eef8fd; }
-                /* CHANGE: Persistent Quick Ship connection recovery form. */
                 .qs-connection-copy { font-size: 13px; line-height: 1.45; color: #334155; margin-bottom: 10px; }
                 .qs-connection-url { display: block; margin-top: 5px; padding: 7px 8px; background: #f1f5f9; border-radius: 5px; color: #0f172a; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
                 .qs-connection-input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; padding: 9px 10px; font: inherit; color: #0f172a; outline: none; }
@@ -667,8 +666,6 @@
         }
 
         showP21Toast(title, message, options = {}) {
-            // CHANGE: Ordinary error/info toasts own the overlay surface exclusively.
-            // Connection setup already removes the preview card in its message handler.
             this.removeLabelPreviewCard();
             const shadow = this.ensureP21FabHost();
             if (!shadow) return;
@@ -697,7 +694,6 @@
             this.p21ToastTimer = setTimeout(() => this.hideP21Toast(), options.durationMs || 12000);
         }
 
-        // CHANGE: A toast-positioned, persistent recovery card for alternate Quick Ship routes.
         showQuickShipConnectionSetup(configuredBase, options = {}) {
             const shadow = this.ensureP21FabHost();
             if (!shadow) return;
@@ -793,7 +789,6 @@
             `;
         }
 
-        // CHANGE: Update the active on-page loading card without recreating it.
         updateLoading(message = "Processing label data...", detail = "") {
             const host = document.getElementById(this.hostId);
             const shadow = host && host.shadowRoot;
@@ -884,7 +879,6 @@
         }
 
         showInfo(msg) {
-            // CHANGE: Result cards and toasts are mutually exclusive.
             this.hideP21Toast();
             if (!this.shadowRoot || !document.getElementById(this.hostId)) this.renderBase();
             const content = this.shadowRoot && this.shadowRoot.getElementById("qs-content");
@@ -904,7 +898,6 @@
         }
 
         showError(msg) {
-            // CHANGE: All errors render as one ERROR preview card; dismiss any toast first.
             this.hideP21Toast();
             if (!this.shadowRoot || !document.getElementById(this.hostId)) this.renderBase();
             const content = this.shadowRoot && this.shadowRoot.getElementById("qs-content");
@@ -1027,7 +1020,6 @@
         const severityType = String((failureInfo && failureInfo.severityType) || "ERROR").toUpperCase();
         const title = severityType === "WARNING" ? "Shipment Warning" : "Shipment Failed";
         const message = normalizeShipmentFailureMessage(failureInfo, shipmentNumber);
-        // CHANGE: Render shipment failure once as an error card; do not duplicate it in a toast.
         ui.showError(message);
         console.warn("[Quick Ship] Label preview blocked from ShipShipment failure context:", {
             shipmentNumber,
@@ -1101,10 +1093,6 @@
 
         ui.removeP21Fab();
         ui.showLoading();
-        // CHANGE: previewKineticLabel is fire-and-forget. Do not provide a response
-        // callback, because the background listener intentionally returns false and
-        // completes through labelPreview/quickShipConnectionRequired messages later.
-        // A callback here causes Chrome's harmless "message port closed" warning.
         try {
             chrome.runtime.sendMessage({
                 type: "previewKineticLabel",
@@ -1147,8 +1135,6 @@
 
         ui.setP21FabState("loading", "Checking...");
 
-        // CHANGE: P21 preview also reports completion through p21PreviewResult,
-        // so no sendMessage response callback should hold open a message port.
         try {
             chrome.runtime.sendMessage({
                 type: "previewP21PackingList",
@@ -1356,11 +1342,9 @@
         }
     });
 
-    // Listen for responses from Background Script
     try {
         chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (msg.type === "labelProcessing") {
-                // CHANGE: Live progress from background/Labelary appears in the on-page card.
                 ui.updateLoading(
                     msg.message || "Processing label data...",
                     msg.detail || ""
@@ -1406,8 +1390,6 @@
                 }
             } else if (msg.type === "labelPreview") {
                 try {
-                    // CHANGE: A label result owns the preview surface exclusively.
-                    // Shipment/technical failures are errors even if isNoData is also true.
                     ui.hideP21Toast();
                     if (msg.success) {
                         ui.showImage(msg.images);

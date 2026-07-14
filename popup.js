@@ -10,16 +10,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     const p21FabToggleBtn = document.getElementById("p21-fab-toggle-btn");
     const p21FabStatus = document.getElementById("p21-fab-status");
     const p21FabResetBtn = document.getElementById("p21-fab-reset-btn");
-    // CHANGE: Quick Ship connection mapping controls.
+    // Quick Ship connection mapping controls.
     const quickShipConnectionsBtn = document.getElementById("quick-ship-connections-btn");
     const connectionsModal = document.getElementById("connections-modal");
+    const connectionsListView = document.getElementById("connections-list-view");
     const connectionsList = document.getElementById("connections-list");
+    const connectionForm = document.getElementById("connection-form");
+    const connectionFormTitle = document.getElementById("connection-form-title");
     const configuredBaseInput = document.getElementById("configured-base-input");
     const accessibleBaseInput = document.getElementById("accessible-base-input");
     const connectionsStatus = document.getElementById("connections-status");
+    const connectionsAddBtn = document.getElementById("connections-add-btn");
     const connectionsCloseBtn = document.getElementById("connections-close-btn");
+    const connectionBackBtn = document.getElementById("connection-back-btn");
+    const connectionCancelBtn = document.getElementById("connection-cancel-btn");
     const connectionsSaveBtn = document.getElementById("connections-save-btn");
-    
+    let editingConfiguredBase = null;
     let fullHistory = [];
 
     // --- Pause/Play Functionality ---
@@ -140,6 +146,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // --- Quick Ship Connections ---
     const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
+    const connectionIcons = {
+        server: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/><path d="M8 6.5h.01M8 17.5h.01M12 10v4"/></svg>',
+        monitor: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+        link: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.1-1.1"/></svg>',
+        chevron: '<svg class="connection-chevron" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>',
+        test: '<svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M320 146c-19-8-41-12-64-12a160 160 0 1 0 160 160"/><polyline points="256 58 336 138 256 218"/></svg>',
+        edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>',
+        remove: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></svg>'
+    };
+
     function normalizePopupBase(value) {
         const raw = String(value || "").trim();
         if (!raw) return "";
@@ -151,51 +167,227 @@ document.addEventListener("DOMContentLoaded", async () => {
             return `${parsed.origin}${basePath}`.replace(/\/$/, "");
         } catch { return withProtocol.replace(/\/$/, ""); }
     }
-    async function renderConnectionMappings() {
-        if (!connectionsList) return;
+
+    function getConnectionName(configured) {
+        try { return new URL(configured).hostname || configured; }
+        catch { return configured.replace(/^https?:\/\//i, "").split(/[/:]/)[0] || configured; }
+    }
+
+    function makeIconButton(icon, label, className = "") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `connection-icon-btn ${className}`.trim();
+        button.innerHTML = icon;
+        button.title = label;
+        button.setAttribute("aria-label", label);
+        return button;
+    }
+
+    async function getConnectionMappings() {
         const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
-        const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
-        connectionsList.innerHTML = "";
+        return { ...(stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {}) };
+    }
+
+    async function renderConnectionMappings(openConfigured = null) {
+        if (!connectionsList) return;
+        const mappings = await getConnectionMappings();
+        connectionsList.replaceChildren();
         const entries = Object.entries(mappings);
         if (!entries.length) {
-            connectionsList.innerHTML = '<div style="color:#64748b;font-size:12px;">No saved alternate addresses.</div>';
+            const empty = document.createElement("div");
+            empty.className = "connection-empty";
+            empty.textContent = "No Quick Ship mappings yet.";
+            connectionsList.appendChild(empty);
             return;
         }
+
+        entries.sort(([a], [b]) => a.localeCompare(b));
         for (const [configured, effective] of entries) {
-            const row = document.createElement("div"); row.className = "connection-row";
-            const from = document.createElement("code"); from.textContent = configured;
-            const arrow = document.createElement("div"); arrow.textContent = "uses"; arrow.style.color = "#64748b";
-            const to = document.createElement("code"); to.textContent = effective;
-            const remove = document.createElement("button"); remove.className = "connection-remove"; remove.textContent = "Remove mapping";
-            remove.addEventListener("click", async () => {
-                delete mappings[configured];
-                await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings });
+            const card = document.createElement("article");
+            card.className = "connection-card";
+            if (configured === openConfigured) card.classList.add("open");
+
+            const summary = document.createElement("button");
+            summary.type = "button";
+            summary.className = "connection-summary";
+            summary.setAttribute("aria-expanded", String(configured === openConfigured));
+
+            const serverIcon = document.createElement("span");
+            serverIcon.className = "connection-server-icon";
+            serverIcon.innerHTML = connectionIcons.server;
+
+            const summaryCopy = document.createElement("span");
+            summaryCopy.className = "connection-summary-copy";
+            const title = document.createElement("span");
+            title.className = "connection-title";
+            title.textContent = getConnectionName(configured);
+            const subtitle = document.createElement("span");
+            subtitle.className = "connection-subtitle";
+            subtitle.textContent = configured;
+            summaryCopy.append(title, subtitle);
+
+            const summaryActions = document.createElement("span");
+            summaryActions.className = "connection-summary-actions";
+            const statusDot = document.createElement("span");
+            statusDot.className = "connection-status-dot";
+            statusDot.title = "Not tested this session";
+            const chevron = document.createElement("span");
+            chevron.innerHTML = connectionIcons.chevron;
+            summaryActions.append(statusDot, chevron);
+            summary.append(serverIcon, summaryCopy, summaryActions);
+
+            const details = document.createElement("div");
+            details.className = "connection-details";
+            const detailsInner = document.createElement("div");
+            detailsInner.className = "connection-details-inner";
+            const content = document.createElement("div");
+            content.className = "connection-details-content";
+            const route = document.createElement("div");
+            route.className = "connection-route";
+
+            function appendRoute(icon, labelText, addressText) {
+                const node = document.createElement("span");
+                node.className = "connection-route-node";
+                node.innerHTML = icon;
+                const copy = document.createElement("span");
+                copy.className = "connection-route-copy";
+                const label = document.createElement("span");
+                label.className = "connection-route-label";
+                label.textContent = labelText;
+                const address = document.createElement("span");
+                address.className = "connection-route-address";
+                address.textContent = addressText;
+                address.title = addressText;
+                copy.append(label, address);
+                route.append(node, copy);
+            }
+
+            appendRoute(connectionIcons.monitor, "Kinetic address", configured);
+            const routeLine = document.createElement("span");
+            routeLine.className = "connection-route-line";
+            route.append(routeLine, document.createElement("span"));
+            appendRoute(connectionIcons.link, "Accessible at", effective);
+
+            const footer = document.createElement("div");
+            footer.className = "connection-card-footer";
+            const testStatus = document.createElement("span");
+            testStatus.className = "connection-test-status";
+            testStatus.textContent = "Not tested this session";
+            const actions = document.createElement("span");
+            actions.className = "connection-icon-actions";
+            const testBtn = makeIconButton(connectionIcons.test, "Test connection");
+            const editBtn = makeIconButton(connectionIcons.edit, "Edit mapping");
+            const removeBtn = makeIconButton(connectionIcons.remove, "Remove mapping", "danger");
+            actions.append(testBtn, editBtn, removeBtn);
+            footer.append(testStatus, actions);
+            content.append(route, footer);
+            detailsInner.appendChild(content);
+            details.appendChild(detailsInner);
+            card.append(summary, details);
+            connectionsList.appendChild(card);
+
+            summary.addEventListener("click", () => {
+                const willOpen = !card.classList.contains("open");
+                card.classList.toggle("open", willOpen);
+                summary.setAttribute("aria-expanded", String(willOpen));
+            });
+
+            testBtn.addEventListener("click", () => {
+                testBtn.disabled = true;
+                testStatus.textContent = "Testing…";
+                statusDot.className = "connection-status-dot";
+                chrome.runtime.sendMessage({ type: "saveQuickShipBaseOverride", configuredBase: configured, candidateBase: effective }, result => {
+                    testBtn.disabled = false;
+                    if (chrome.runtime.lastError || !result || !result.success) {
+                        statusDot.className = "connection-status-dot failed";
+                        statusDot.title = "Test failed";
+                        testStatus.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
+                        return;
+                    }
+                    statusDot.className = "connection-status-dot connected";
+                    statusDot.title = "Connected";
+                    testStatus.textContent = "Connected · tested just now";
+                });
+            });
+
+            editBtn.addEventListener("click", () => showConnectionForm(configured, effective));
+            removeBtn.addEventListener("click", async () => {
+                const latest = await getConnectionMappings();
+                delete latest[configured];
+                await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest });
                 await renderConnectionMappings();
             });
-            row.append(from, arrow, to, remove); connectionsList.appendChild(row);
         }
     }
-    function closeConnectionsModal() { connectionsModal?.classList.remove("active"); }
+
+    function showConnectionList() {
+        editingConfiguredBase = null;
+        connectionForm?.classList.remove("active");
+        connectionsListView?.classList.remove("hidden");
+        connectionsStatus.textContent = "";
+        connectionsStatus.className = "connection-status";
+    }
+
+    function showConnectionForm(configured = "", effective = "") {
+        editingConfiguredBase = configured || null;
+        configuredBaseInput.value = configured;
+        accessibleBaseInput.value = effective;
+        connectionFormTitle.textContent = configured ? "Edit mapping" : "Add mapping";
+        connectionsSaveBtn.textContent = configured ? "Test & Save changes" : "Test & Save";
+        connectionsStatus.textContent = "";
+        connectionsStatus.className = "connection-status";
+        connectionsListView?.classList.add("hidden");
+        connectionForm?.classList.add("active");
+        configuredBaseInput.focus();
+    }
+
+    function closeConnectionsModal() {
+        connectionsModal?.classList.remove("active");
+        showConnectionList();
+    }
+
     quickShipConnectionsBtn?.addEventListener("click", async () => {
-        closeMoreActionsMenu(); connectionsStatus.textContent = "";
-        await renderConnectionMappings(); connectionsModal?.classList.add("active");
+        closeMoreActionsMenu();
+        showConnectionList();
+        await renderConnectionMappings();
+        connectionsModal?.classList.add("active");
     });
+    connectionsAddBtn?.addEventListener("click", () => showConnectionForm());
+    connectionBackBtn?.addEventListener("click", showConnectionList);
+    connectionCancelBtn?.addEventListener("click", showConnectionList);
     connectionsCloseBtn?.addEventListener("click", closeConnectionsModal);
     connectionsModal?.addEventListener("click", event => { if (event.target === connectionsModal) closeConnectionsModal(); });
+
     connectionsSaveBtn?.addEventListener("click", () => {
         const configuredBase = normalizePopupBase(configuredBaseInput.value);
         const candidateBase = normalizePopupBase(accessibleBaseInput.value);
-        if (!configuredBase || !candidateBase) { connectionsStatus.textContent = "Enter both addresses."; return; }
-        connectionsSaveBtn.disabled = true; connectionsSaveBtn.textContent = "Testing...";
-        connectionsStatus.textContent = "Testing the browser-accessible address...";
+        connectionsStatus.className = "connection-status";
+        if (!configuredBase || !candidateBase) {
+            connectionsStatus.classList.add("error");
+            connectionsStatus.textContent = "Enter both addresses.";
+            return;
+        }
+        connectionsSaveBtn.disabled = true;
+        connectionsSaveBtn.textContent = "Testing…";
+        connectionsStatus.textContent = "Testing the browser-accessible address…";
         chrome.runtime.sendMessage({ type: "saveQuickShipBaseOverride", configuredBase, candidateBase }, async result => {
-            connectionsSaveBtn.disabled = false; connectionsSaveBtn.textContent = "Test & Save";
+            connectionsSaveBtn.disabled = false;
+            connectionsSaveBtn.textContent = editingConfiguredBase ? "Test & Save changes" : "Test & Save";
             if (chrome.runtime.lastError || !result || !result.success) {
-                connectionsStatus.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed."; return;
+                connectionsStatus.classList.add("error");
+                connectionsStatus.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
+                return;
             }
+            if (editingConfiguredBase && editingConfiguredBase !== configuredBase) {
+                const latest = await getConnectionMappings();
+                delete latest[editingConfiguredBase];
+                latest[configuredBase] = candidateBase;
+                await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest });
+            }
+            connectionsStatus.classList.add("success");
             connectionsStatus.textContent = "Connected and saved.";
-            configuredBaseInput.value = ""; accessibleBaseInput.value = "";
-            await renderConnectionMappings();
+            await renderConnectionMappings(configuredBase);
+            setTimeout(showConnectionList, 450);
         });
     });
     // --- Load History ---
@@ -343,6 +535,7 @@ Hint: ${details.hint}` : "";
         if (e.key === "Escape") {
             if (modal.classList.contains("active")) closeModal();
             if (errorModal && errorModal.classList.contains("active")) closeErrorModal();
+            if (connectionsModal && connectionsModal.classList.contains("active")) closeConnectionsModal();
         }
     });
 

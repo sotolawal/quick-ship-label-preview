@@ -25,7 +25,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 // Check if PackID message is successfully received.
-// CHANGE: One response-owning listener prevents async message response races.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "testQuickShipConnection") {
         testQuickShipConnection(msg.candidateBase, msg.authHeaders || {})
@@ -127,7 +126,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 const activeRequests = new Map();
 const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
 
-// CHANGE: Keep configured and browser-accessible Quick Ship addresses separate.
 function normalizeQuickShipBase(value) {
     const raw = String(value || "").trim();
     if (!raw) return "";
@@ -269,8 +267,6 @@ function getShipmentFailureInfo(data) {
     const blockingMessages = getBlockingShipmentErrorMessages(errorMessages);
     const hasBlockingErrors = blockingMessages.length > 0;
 
-    // CHANGE: Explicit failure signals always win. A warning can contain entries in
-    // Quick Ship's errors/messages array without preventing shipment completion.
     if (hasExplicitFailure || hasFailureSeverity) {
         return {
             severityType: severity || "ERROR",
@@ -280,8 +276,6 @@ function getShipmentFailureInfo(data) {
         };
     }
 
-    // CHANGE: Successful responses and WARNING/INFO notifications are non-blocking.
-    // Continue resolving the label while retaining the warning in the service-worker log.
     if (isSuccess === true || hasWarningSeverity) {
         if (notificationMessage || hasBlockingErrors) {
             console.warn("[Quick Ship] Shipment completed with a non-blocking warning:", {
@@ -476,8 +470,7 @@ function fileNameHasLookupToken(fileName, lookup) {
     if (!name || !token) return false;
     return new RegExp(`(^|[^A-Za-z0-9])${escapeRegex(token)}([^A-Za-z0-9]|$)`, "i").test(name);
 }
-// CHANGE: CarrierXML files may be written before Kinetic publishes the completed
-// transaction context to the browser. Exact filename-token matching remains required.
+
 const LIVE_FILE_TIME_TOLERANCE_MS = 90 * 1000;
 
 function fileIsNewEnoughForLivePreview(file, startedAt, toleranceMs = LIVE_FILE_TIME_TOLERANCE_MS) {
@@ -497,8 +490,7 @@ async function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// CHANGE: Labelary can rate-limit a burst of otherwise sequential requests.
-// Retry transient failures with backoff while preserving Labelary's response in the logs.
+
 async function renderZplWithRetry(zpl, headers, signal = null, options = {}) {
     const url = "https://api.labelary.com/v1/printers/8dpmm/labels/4x6/0";
     const maxAttempts = Number(options.maxAttempts || 4);
@@ -911,7 +903,6 @@ function tryDecodeBase64Text(text) {
     }
 }
 
-// CHANGE: Send processing updates to the popup when clipboard preview is active.
 function sendLabelProcessingProgress(tabId, message, detail = "") {
     if (!tabId) return;
     chrome.tabs.sendMessage(tabId, {
@@ -1021,7 +1012,6 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                         break;
                 }
 
-                // CHANGE: Retry Labelary rate limits instead of silently losing the document.
                 const labelaryResp = await renderZplWithRetry(
                     zpl,
                     labelaryHeaders,
@@ -1050,7 +1040,6 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     });
                 }
 
-                // CHANGE: Pace successful requests too, preventing another immediate burst.
                 if (dataIndex < dataList.length - 1) {
                     await sleep(1000);
                 }
@@ -1197,8 +1186,6 @@ async function handleKineticLabelPreview({ packID, shipmentNumber, mfTransNum, k
     };
 
     try {
-        // CHANGE: Quick Ship CarrierXML resolution uses the transaction/shipment number.
-        // Kinetic PackID remains only a final legacy fallback.
         const cleanLookupNumber = String(
             shipmentNumber || mfTransNum || packID || kineticPackID || ""
         ).trim();
