@@ -746,18 +746,13 @@ Hint: ${details.hint}` : "";
         }).filter(Boolean);
 
         if (images.length === 0) return;
-
+        
         chrome.runtime.sendMessage({
             type: "openViewer",
             images,
             metadata: {
                 source: "popup",
                 ...metadata
-            }
-        }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.error("[Quick Ship] Failed to open viewer:", chrome.runtime.lastError.message);
-                showErrorModal(chrome.runtime.lastError.message || "Failed to open viewer.");
             }
         });
     }
