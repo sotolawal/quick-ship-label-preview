@@ -83,7 +83,11 @@
         .btn {
             background: var(--qs-blue);
             color: #fff;
+            gap: 6px;
             border: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             padding: 8px 14px;
             border-radius: 6px;
             cursor: pointer;
@@ -91,6 +95,13 @@
             font-weight: 600;
             transition: background 0.2s, transform 0.1s;
         }
+
+        .btn svg {
+            display: block;
+            flex: 0 0 auto;
+            padding-bottom: 2px;
+        }
+
 
         .btn:hover {
             background: var(--qs-blue-hover);

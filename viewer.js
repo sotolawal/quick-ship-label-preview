@@ -229,10 +229,12 @@
 
         const fan = createFanIcon(idx);
 
+        const rotateBtnIcon = '<svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M320 146c-19-8-41-12-64-12a160 160 0 1 0 160 160"/><polyline points="256 58 336 138 256 218"/></svg>'
+
         const rotateBtn = document.createElement("button");
         rotateBtn.className = "btn";
         rotateBtn.type = "button";
-        rotateBtn.textContent = "Rotate ⟳";
+        rotateBtn.innerHTML = `Rotate${rotateBtnIcon}`;
         rotateBtn.addEventListener("click", () => rotate(`media-${idx}`, `fan-${idx}`));
 
         actions.appendChild(fan);
@@ -258,7 +260,7 @@
             img.setAttribute("data-rotation", "0");
             container.appendChild(img);
         }
-        
+
         const mediaShell = document.createElement("div");
         mediaShell.className = "media-shell";
         mediaShell.appendChild(container);
