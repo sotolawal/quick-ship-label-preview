@@ -28,7 +28,6 @@ Key Features
 5. Label history
         Saves recent label previews for quick access.
 
-
 Supported Browsers
         Chrome, Microsoft Edge and other chromium browsers such as Brave, Opera, and Vivaldi
 
