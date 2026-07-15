@@ -7,29 +7,10 @@ What's New/Changed
 - Labels can now be printed with the appropriate dimensions when printing from the viewer. 
 
 What This Does
-This extension helps preview shipping-related documents from Quick Ship. It can preview labels as shipments are processed, preview copied label data, store recent previews, and provide a manual P21 Packing List preview option when available.
+This extension helps preview shipping related documents and labels from Quick Ship. It can preview as shipments are processed, preview copied label or document data and store recent previews.
 
 Important Requirement
         Quick Ship must have the GenerateXML app setting enabled.
-
-Key Features
-1. Quick Ship label preview
-        Automatically previews labels as shipments are processed in Quick Ship.
-   
-2. Kinetic label preview
-        Automatically previews labels while freighting in Kinetic.
-   
-3. Prophet 21 Packing List preview
-        Displays a floating Check Packing List button only when the Quick Ship shipment is identified as a P21 shipment.
-   
-4. Manual label preview
-        Allows selected/copied label data to be previewed through the browser context menu.
-   
-5. Label history
-        Saves recent label previews for quick access.
-
-Supported Browsers
-        Chrome, Microsoft Edge and other chromium browsers such as Brave, Opera, and Vivaldi
 
 Steps to Setup
 Loading the extension:
@@ -41,33 +22,29 @@ Loading the extension:
 Using the extension:
 1. Click the extension icon in your browser.
 2. Pin the extension for easier access.
-3. Open the extension popup and confirm the extension is active.
+3. Ship, freight, or copy label data for preview. 
 
+Key Features
+1. Quick Ship label preview
+        Automatically previews labels as shipments are processed in Quick Ship.
+   
+2. Kinetic label preview
+        Automatically previews labels while freighting in Kinetic.
+   
+3. Prophet 21 Packing List preview
+        Automatically previews labels in Quick Ship environments integrated with Prophet 21. 
+                Notes:
+                        1. Uses a floating button that can be moved and/or dismissed.  
 
-What You Can Do
-Preview labels as you ship:
-1. Ensure the extension is active.
-2. Process a shipment in Quick Ship or Kinetic.
-3. The label preview opens automatically when label data is found.
+4. Clipboard Previews
+        Allows selected/copied label data to be previewed.
+                Preview copied label data:
+                        1. Highlight text that contains supported label data.
+                        2. Right-click the highlighted text.
+                        3. Select Preview.
 
-Preview Kinetic labels:
-   Process or freight the shipment in Kinetic in Customer Shipment Entry.
-
-
-Preview P21 Packing Lists:
-1. Enter a pick ticket into Quick Ship.
-2. Use the floating Check Packing List button when it appears.
-       (You can drag and move the button as needed.)
-
-Preview copied label data:
-1. Highlight text that contains supported label data.
-2. Right-click the highlighted text.
-3. Select Preview.
-
-View label history:
-1. Click the extension icon.
-2. Select a saved preview from the history list.
-       (Only the 20 most recent label previews are retained.)
+Supported Browsers
+        Chrome, Microsoft Edge and other chromium browsers such as Brave, Opera, and Vivaldi.
 
 Supported Carriers
 - UPS
@@ -81,7 +58,6 @@ Supported Carriers
 - Purolator
 - Canada Post
 - DHL
-
 
 Contact
 Got questions? Ping me on Teams or email me at tolu.lawal@epicor.com.
