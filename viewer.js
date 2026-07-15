@@ -99,15 +99,24 @@
     function renderImages(images) {
         const status = document.getElementById("status");
         const viewer = document.getElementById("viewer");
+        const printBtn = document.getElementById("print-all-btn");
 
         if (!viewer) throw new Error("Viewer container was not found.");
         if (status) status.remove();
 
         viewer.innerHTML = "";
 
-        images.forEach((item, idx) => {
-            const normalized = normalizePreviewItem(item);
-            const card = createLabelCard(normalized, idx);
+        const normalizedItems = images.map(normalizePreviewItem);
+        const hasPdf = normalizedItems.some((item) => item.type === "application/pdf");
+
+        // PDFs already provide Chrome's native print controls. Avoid printing the
+        // surrounding viewer HTML, which can split embedded PDF pages incorrectly.
+        if (printBtn) {
+            printBtn.hidden = hasPdf;
+        }
+
+        normalizedItems.forEach((item, idx) => {
+            const card = createLabelCard(item, idx);
             viewer.appendChild(card);
         });
 
@@ -215,7 +224,7 @@
 
     function createLabelCard(item, idx) {
         const card = document.createElement("article");
-        card.className = "label-card";
+        card.className = `label-card ${item.type === "application/pdf" ? "pdf-item" : "image-item"}`;
 
         const header = document.createElement("div");
         header.className = "label-header";

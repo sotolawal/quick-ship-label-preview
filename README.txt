@@ -1,10 +1,10 @@
 Quick Ship Label Preview
 Release version 2.5
 
-What's New
+What's New/Changed
 - Added Quick Ship website name mappings to IP addresses to allow label previews outside of VMs. 
 - Added throttling to comply with Labelary rate limits when previewing several labels/documents at once. 
-
+- Labels can now be printed with the appropriate dimensions when printing from the viewer. 
 
 What This Does
 This extension helps preview shipping-related documents from Quick Ship. It can preview labels as shipments are processed, preview copied label data, store recent previews, and provide a manual P21 Packing List preview option when available.
