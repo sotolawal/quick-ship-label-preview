@@ -25,8 +25,7 @@ function patchFetch() {
         const url = getFetchUrl(args);
         const method = getFetchMethod(args);
         const requestHeaders = getFetchRequestHeaders(args);
-        const requestBodyText = getFetchRequestBodyText(args);
-        safeProcessRequestText(requestBodyText, url, requestHeaders, method);
+        processFetchRequestBody(args, url, requestHeaders, method);
         // console.log("Processing fetch response for URL:", url);
         try {
             // Clone the response to read the body without consuming the original stream
@@ -65,6 +64,9 @@ function patchXHR() {
     XHR.open = function(method, url) {
         this._url = url; // Store URL for debugging if needed
         this._method = method;
+        // XMLHttpRequest instances can be reused. Never carry captured credentials
+        // or other request headers from a previous open/send cycle.
+        this._headers = {};
         // console.log("XHR open called with URL:", url);
         const result = origOpen.apply(this, arguments);
         // console.log("XHR open applied");
@@ -525,12 +527,22 @@ function getFetchMethod(args) {
     return "GET";
 }
 
-function getFetchRequestBodyText(args) {
+function processFetchRequestBody(args, url, headers, method) {
     const input = args && args[0];
     const init = args && args[1];
-    if (init && typeof init.body === "string") return init.body;
-    // Do not attempt to read Request bodies here; reading could consume a one-shot stream.
-    return null;
+    if (init && typeof init.body === "string") {
+        safeProcessRequestText(init.body, url, headers, method);
+        return;
+    }
+    if (!(input instanceof Request)) return;
+    try {
+        // Read a clone so the page's original one-shot request stream is untouched.
+        input.clone().text()
+            .then(bodyText => safeProcessRequestText(bodyText, url, headers, method))
+            .catch(() => { /* Ignore unreadable or non-text request bodies. */ });
+    } catch {
+        // Ignore clone failures and allow the page request to continue normally.
+    }
 }
 
 function getFetchRequestHeaders(args) {

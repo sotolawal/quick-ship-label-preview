@@ -666,34 +666,53 @@
         }
 
         showP21Toast(title, message, options = {}) {
-            this.removeLabelPreviewCard();
+            if (!options.preservePreview) this.removeLabelPreviewCard();
             const shadow = this.ensureP21FabHost();
             if (!shadow) return;
-
             let toast = shadow.getElementById("qs-p21-toast");
             if (!toast) {
                 toast = document.createElement("div");
                 toast.id = "qs-p21-toast";
                 toast.className = "qs-p21-toast";
-                toast.innerHTML = `
-                    <div class="qs-p21-toast-header">
-                        <div class="qs-p21-toast-title" id="qs-p21-toast-title"></div>
-                        <button class="qs-p21-toast-close" id="qs-p21-toast-close" type="button" aria-label="Dismiss">&times;</button>
-                    </div>
-                    <div class="qs-p21-toast-message" id="qs-p21-toast-message"></div>
-                `;
                 shadow.appendChild(toast);
-                toast.querySelector("#qs-p21-toast-close").addEventListener("click", () => this.hideP21Toast());
             }
-
-            toast.querySelector("#qs-p21-toast-title").textContent = title || "P21 Packing List Error";
-            toast.querySelector("#qs-p21-toast-message").textContent = message || "An unknown error occurred.";
+            toast.replaceChildren();
+            const header = document.createElement("div");
+            header.className = "qs-p21-toast-header";
+            const titleEl = document.createElement("div");
+            titleEl.className = "qs-p21-toast-title";
+            titleEl.textContent = title || "P21 Packing List Error";
+            const closeBtn = document.createElement("button");
+            closeBtn.className = "qs-p21-toast-close";
+            closeBtn.type = "button";
+            closeBtn.setAttribute("aria-label", "Dismiss");
+            closeBtn.textContent = "×";
+            closeBtn.addEventListener("click", () => this.hideP21Toast());
+            header.append(titleEl, closeBtn);
+            const messageEl = document.createElement("div");
+            messageEl.className = "qs-p21-toast-message";
+            messageEl.textContent = message || "An unknown error occurred.";
+            toast.append(header, messageEl);
+            if (typeof options.onRetry === "function") {
+                const actions = document.createElement("div");
+                actions.className = "qs-p21-toast-actions";
+                const retryBtn = document.createElement("button");
+                retryBtn.className = "qs-p21-toast-btn primary";
+                retryBtn.type = "button";
+                retryBtn.textContent = options.retryLabel || "Try Again";
+                retryBtn.addEventListener("click", () => {
+                    retryBtn.disabled = true;
+                    this.hideP21Toast();
+                    options.onRetry();
+                }, { once: true });
+                actions.appendChild(retryBtn);
+                toast.appendChild(actions);
+            }
             toast.classList.add("qs-p21-toast-visible");
-
             if (this.p21ToastTimer) clearTimeout(this.p21ToastTimer);
-            this.p21ToastTimer = setTimeout(() => this.hideP21Toast(), options.durationMs || 12000);
+            const durationMs = Number(options.durationMs ?? (options.onRetry ? 30000 : 12000));
+            if (durationMs > 0) this.p21ToastTimer = setTimeout(() => this.hideP21Toast(), durationMs);
         }
-
         showQuickShipConnectionSetup(configuredBase, options = {}) {
             const shadow = this.ensureP21FabHost();
             if (!shadow) return;
@@ -780,15 +799,25 @@
             if (!root) return;
             const { content, status } = root;
             status.textContent = "Generating";
-            content.innerHTML = `
-                <div class="qs-loading" role="status" aria-live="polite" aria-atomic="true">
-                    <div class="qs-spinner"></div>
-                    <span id="qs-loading-message">${message}</span>
-                    <span id="qs-loading-detail" style="font-size:12px;color:#7a7a7a;text-align:center;line-height:1.4;${detail ? "" : "display:none;"}">${detail}</span>
-                </div>
-            `;
+            content.replaceChildren();
+            const loading = document.createElement("div");
+            loading.className = "qs-loading";
+            loading.setAttribute("role", "status");
+            loading.setAttribute("aria-live", "polite");
+            loading.setAttribute("aria-atomic", "true");
+            const spinner = document.createElement("div");
+            spinner.className = "qs-spinner";
+            const messageEl = document.createElement("span");
+            messageEl.id = "qs-loading-message";
+            messageEl.textContent = message;
+            const detailEl = document.createElement("span");
+            detailEl.id = "qs-loading-detail";
+            detailEl.style.cssText = "font-size:12px;color:#7a7a7a;text-align:center;line-height:1.4;";
+            detailEl.textContent = detail;
+            detailEl.style.display = detail ? "inline" : "none";
+            loading.append(spinner, messageEl, detailEl);
+            content.appendChild(loading);
         }
-
         updateLoading(message = "Processing label data...", detail = "") {
             const host = document.getElementById(this.hostId);
             const shadow = host && host.shadowRoot;
@@ -883,38 +912,37 @@
             if (!this.shadowRoot || !document.getElementById(this.hostId)) this.renderBase();
             const content = this.shadowRoot && this.shadowRoot.getElementById("qs-content");
             const status = this.shadowRoot && this.shadowRoot.getElementById("qs-status");
-
             if (!content || !status) return;
-
             status.textContent = "Info";
             status.style.backgroundColor = "#e1f5fe";
             status.style.color = "#0277bd";
-
-            content.innerHTML = `
-                <div class="qs-info">
-                    <div>${msg}</div>
-                </div>
-            `;
+            content.replaceChildren();
+            const info = document.createElement("div");
+            info.className = "qs-info";
+            const text = document.createElement("div");
+            text.textContent = msg;
+            info.appendChild(text);
+            content.appendChild(info);
         }
-
         showError(msg) {
             this.hideP21Toast();
             if (!this.shadowRoot || !document.getElementById(this.hostId)) this.renderBase();
             const content = this.shadowRoot && this.shadowRoot.getElementById("qs-content");
             const status = this.shadowRoot && this.shadowRoot.getElementById("qs-status");
-
             if (!content || !status) return;
-
             status.textContent = "Error";
             status.style.backgroundColor = "#ffebee";
             status.style.color = "#c62828";
-
-            content.innerHTML = `
-                <div class="qs-error">
-                    <span class="qs-error-icon">⚠️</span>
-                    <div>${msg}</div>
-                </div>
-            `;
+            content.replaceChildren();
+            const errorBox = document.createElement("div");
+            errorBox.className = "qs-error";
+            const icon = document.createElement("span");
+            icon.className = "qs-error-icon";
+            icon.textContent = "⚠️";
+            const text = document.createElement("div");
+            text.textContent = msg;
+            errorBox.append(icon, text);
+            content.appendChild(errorBox);
         }
     }
 
@@ -1394,6 +1422,13 @@
                     ui.hideP21Toast();
                     if (msg.success) {
                         ui.showImage(msg.images);
+                        if (msg.warning) {
+                            setTimeout(() => ui.showP21Toast(
+                                msg.warningTitle || "Preview Partially Completed",
+                                msg.warning,
+                                { durationMs: 15000, preservePreview: true }
+                            ), 0);
+                        }
                     } else if (msg.category === "shipment_failed" || msg.severityType === "ERROR") {
                         console.error("[Quick Ship] Shipment Error:", msg.error);
                         ui.showError(msg.error || "The shipment failed in Quick Ship.");

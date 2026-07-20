@@ -169,6 +169,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         } catch { return withProtocol.replace(/\/$/, ""); }
     }
 
+    function quickShipPopupOverrideKey(value) {
+        return normalizePopupBase(value).toLowerCase();
+    }
     function getConnectionName(configured) {
         try { return new URL(configured).hostname || configured; }
         catch { return configured.replace(/^https?:\/\//i, "").split(/[/:]/)[0] || configured; }
@@ -195,14 +198,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     async function saveConnectionTestState(configured, state, message = "") {
+        const key = quickShipPopupOverrideKey(configured);
         const states = await getConnectionTestStates();
-        states[configured] = {
+        states[key] = {
             state,
             message,
             testedAt: Date.now()
         };
         await chrome.storage.local.set({ [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: states });
-        return states[configured];
+        return states[key];
     }
 
     function formatConnectionTestState(testState) {
@@ -233,6 +237,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         entries.sort(([a], [b]) => a.localeCompare(b));
         for (const [configured, effective] of entries) {
+            const configuredKey = quickShipPopupOverrideKey(configured);
             const card = document.createElement("article");
             card.className = "connection-card";
             if (configured === openConfigured) card.classList.add("open");
@@ -259,7 +264,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             const summaryActions = document.createElement("span");
             summaryActions.className = "connection-summary-actions";
             const statusDot = document.createElement("span");
-            const savedTestState = testStates[configured];
+            const savedTestState = testStates[configuredKey];
             statusDot.className = "connection-status-dot";
             if (savedTestState?.state === "connected") statusDot.classList.add("connected");
             if (savedTestState?.state === "failed") statusDot.classList.add("failed");
@@ -357,8 +362,8 @@ document.addEventListener("DOMContentLoaded", async () => {
                     getConnectionMappings(),
                     getConnectionTestStates()
                 ]);
-                delete latest[configured];
-                delete testStates[configured];
+                delete latest[configuredKey];
+                delete testStates[configuredKey];
                 await chrome.storage.local.set({
                     [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
                     [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
@@ -426,23 +431,27 @@ document.addEventListener("DOMContentLoaded", async () => {
                 connectionsStatus.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
                 return;
             }
-            if (editingConfiguredBase && editingConfiguredBase !== configuredBase) {
+            const configuredKey = quickShipPopupOverrideKey(configuredBase);
+            const editingKey = editingConfiguredBase
+                ? quickShipPopupOverrideKey(editingConfiguredBase)
+                : null;
+            if (editingKey && editingKey !== configuredKey) {
                 const [latest, testStates] = await Promise.all([
                     getConnectionMappings(),
                     getConnectionTestStates()
                 ]);
-                delete latest[editingConfiguredBase];
-                delete testStates[editingConfiguredBase];
-                latest[configuredBase] = candidateBase;
+                delete latest[editingKey];
+                delete testStates[editingKey];
+                latest[configuredKey] = candidateBase;
                 await chrome.storage.local.set({
                     [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
                     [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
                 });
             }
-            await saveConnectionTestState(configuredBase, "connected");
+            await saveConnectionTestState(configuredKey, "connected");
             connectionsStatus.classList.add("success");
             connectionsStatus.textContent = "Connected and saved.";
-            await renderConnectionMappings(configuredBase);
+            await renderConnectionMappings(configuredKey);
             setTimeout(showConnectionList, 450);
         });
     });
@@ -784,6 +793,9 @@ Hint: ${details.hint}` : "";
                 openInNewTab(msg.images, {
                     source: "clipboard"
                 });
+                if (msg.warning) {
+                    showErrorModal(msg.warning, msg.warningTitle || "Preview Partially Completed");
+                }
             } else {
                 console.error(msg.error);
                 const title = msg.title || (msg.isNoData ? "Nothing to Preview" : "Error");

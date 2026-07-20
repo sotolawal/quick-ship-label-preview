@@ -100,7 +100,8 @@ async function handleRuntimeMessage(msg, sender) {
             baseUrl: msg.baseUrl,
             freightURL: msg.freightURL,
             authHeaders: msg.authHeaders || {},
-            tabId
+            tabId,
+            livePreviewStartedAt: msg.livePreviewStartedAt
         });
     } else if (msg.type === "previewP21PackingList") {
         const tabId = sender.tab ? sender.tab.id : null;
@@ -930,6 +931,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         const { data: rawData, format } = extracted;
         const dataList = Array.isArray(rawData) ? rawData : [rawData];
         const processedImages = [];
+        const failedDocuments = [];
 
         for (const [dataIndex, base64] of dataList.entries()) {
             sendLabelProcessingProgress(
@@ -983,16 +985,21 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     zpl = atob(base64);
                 } catch (err) {
                     console.warn("Failed to decode base64 label data", err);
+                    failedDocuments.push({ index: dataIndex + 1, reason: "The encoded label could not be decoded." });
                     continue;
                 }
 
                 zpl = zpl.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\0/g, "").trim();
-                if (!zpl) continue;
+                if (!zpl) {
+                    failedDocuments.push({ index: dataIndex + 1, reason: "The decoded label was empty." });
+                    continue;
+                }
 
                 // Verify if it's likely valid ZPL before hitting the Labelary API
                 // Most ZPL labels start with ^XA, but allow for some flexibility
                 if (!zpl.includes("^XA") && !zpl.includes("^xa")) {
                     console.warn("Skipping Labelary request: Decoded data does not appear to be valid ZPL (missing ^XA command).", zpl.substring(0, 100));
+                    failedDocuments.push({ index: dataIndex + 1, reason: "The decoded document was not recognized as PDF, image, or ZPL." });
                     continue;
                 }
 
@@ -1038,6 +1045,8 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                         src: b64png,
                         type: "image/png"
                     });
+                } else {
+                    failedDocuments.push({ index: dataIndex + 1, reason: "The label renderer could not produce an image." });
                 }
 
                 if (dataIndex < dataList.length - 1) {
@@ -1072,10 +1081,16 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         });
 
         if (!signal || !signal.aborted) {
+            const failedCount = failedDocuments.length;
             const payload = {
                 type: "labelPreview",
                 success: true,
-                images: processedImages
+                images: processedImages,
+                warningTitle: failedCount ? "Preview Partially Completed" : undefined,
+                warning: failedCount
+                    ? `${processedImages.length} of ${dataList.length} documents were prepared. ${failedCount} document${failedCount === 1 ? "" : "s"} could not be produced.`
+                    : undefined,
+                failedDocuments
             };
 
             if (baseUrl === "Popup") {
@@ -1095,15 +1110,15 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
     } catch (err) {
         // If signal exists and is aborted, suppress error
         if (signal && (signal.aborted || err.name === 'AbortError')) return;
-
-        const isNoData = err.message === "No valid label data found in the copied text. Please check your highlight and try again." || err.message === "Error: No data found.";
-
-        // Send error to tab
+        // Preserve structured manual-preview error details for specific popup guidance.
         const errorPayload = {
             type: "labelPreview",
             success: false,
+            title: err.previewTitle || "Error",
+            category: err.previewCategory || "processing_error",
+            hint: err.previewHint || null,
             error: err.message || "Failed to process label data.",
-            isNoData: isNoData
+            isNoData: Boolean(err.isNoData)
         };
 
         if (baseUrl === "Popup") {
@@ -1688,22 +1703,36 @@ async function sendToTabSafe(tabId, message) {
     }
 }
 
+function getHistoryContentFingerprint(item) {
+    const images = Array.isArray(item && item.images) ? item.images : [];
+    const seed = images.map(value => String(value || "")).join("|");
+    let hash = 2166136261;
+    for (let i = 0; i < seed.length; i++) {
+        hash ^= seed.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+}
+function getHistoryDeduplicationKey(item) {
+    const packID = String(item && item.packID || "").trim();
+    const website = String(item && item.website || "").trim().toLowerCase();
+    if (isManualPreviewSource(packID)) {
+        return `manual:${packID.toLowerCase()}:${website}:${getHistoryContentFingerprint(item)}`;
+    }
+    return `shipment:${packID.toLowerCase()}:${website}`;
+}
 async function saveToHistory(item) {
     try {
         const result = await chrome.storage.local.get("labelHistory");
-        let history = result.labelHistory || [];
-
-        // Remove duplicates
-        history = history.filter(h => h.packID !== item.packID);
-
-        // Add new item to the top
-        history.unshift(item);
-
-        // Limit to last 20 items
-        if (history.length > 20) {
-            history = history.slice(0, 20);
-        }
-
+        let history = Array.isArray(result.labelHistory) ? result.labelHistory : [];
+        const historyKey = getHistoryDeduplicationKey(item);
+        const savedItem = { ...item, historyKey };
+        history = history.filter(existing => {
+            const existingKey = existing.historyKey || getHistoryDeduplicationKey(existing);
+            return existingKey !== historyKey;
+        });
+        history.unshift(savedItem);
+        if (history.length > 100) history = history.slice(0, 100);
         await chrome.storage.local.set({ labelHistory: history });
     } catch (e) {
         console.error("Failed to save history:", e);

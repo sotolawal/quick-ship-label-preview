@@ -2,34 +2,53 @@
   "manifest_version": 3,
   "name": "Quick Ship Label Preview",
   "description": "Preview shipping labels before printing, either while shipping or by copying.",
-  "icons" : {
+  "icons": {
     "16": "icons/q16.png",
     "32": "icons/q128.png",
-    "64": "icons/q128.png",  
+    "64": "icons/q128.png",
     "48": "icons/q128.png",
     "128": "icons/q128.png"
   },
   "version": "1.0",
-  "permissions": ["storage", "alarms", "contextMenus", "clipboardRead", "webNavigation"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "contextMenus",
+    "clipboardRead",
+    "webNavigation",
+    "unlimitedStorage"
+  ],
   "host_permissions": [
     "http://*/*",
     "https://*/*"
   ],
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"]
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ]
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["injected.js"],
-      "matches": ["http://*/*", "https://*/*"]
+      "resources": [
+        "injected.js"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
     }
   ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Recent Labels"
   },
-  "background": { "service_worker": "background.js" }
+  "background": {
+    "service_worker": "background.js"
+  }
 }
