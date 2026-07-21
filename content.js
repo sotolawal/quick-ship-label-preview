@@ -392,6 +392,26 @@
                     color: #555;
                     font-weight: 600;
                 }
+                .qs-preview-warning {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 9px;
+                    padding: 10px 12px;
+                    background: #fff8e1;
+                    color: #6b4f00;
+                    border-bottom: 1px solid #f0d98a;
+                    font-size: 12px;
+                    line-height: 1.4;
+                    box-sizing: border-box;
+                    width: 100%;
+                }
+                .qs-preview-warning-icon {
+                    flex: 0 0 auto;
+                    font-size: 15px;
+                    line-height: 1.2;
+                }
+                .qs-preview-warning-copy { min-width: 0; }
+                .qs-preview-warning-title { display: block; font-weight: 700; margin-bottom: 2px; }
 
                 @keyframes slideUp {
                     from { opacity: 0; transform: translateY(20px); }
@@ -840,7 +860,7 @@
             }
         }
 
-        showImage(images) {
+        showImage(images, options = {}) {
             const content = this.shadowRoot.getElementById("qs-content");
             const status = this.shadowRoot.getElementById("qs-status");
 
@@ -859,6 +879,25 @@
             wrapper.style.display = "flex";
             wrapper.style.flexDirection = "column";
             wrapper.style.width = "100%";
+
+            if (options.warning) {
+                const warning = document.createElement("div");
+                warning.className = "qs-preview-warning";
+                warning.setAttribute("role", "status");
+                const icon = document.createElement("span");
+                icon.className = "qs-preview-warning-icon";
+                icon.textContent = "⚠";
+                const copy = document.createElement("span");
+                copy.className = "qs-preview-warning-copy";
+                const title = document.createElement("span");
+                title.className = "qs-preview-warning-title";
+                title.textContent = options.warningTitle || "Additional document unavailable";
+                const detail = document.createElement("span");
+                detail.textContent = options.warning;
+                copy.append(title, detail);
+                warning.append(icon, copy);
+                wrapper.appendChild(warning);
+            }
 
             // Image Area
             const imgView = document.createElement("div");
@@ -1421,14 +1460,11 @@
                 try {
                     ui.hideP21Toast();
                     if (msg.success) {
-                        ui.showImage(msg.images);
-                        if (msg.warning) {
-                            setTimeout(() => ui.showP21Toast(
-                                msg.warningTitle || "Preview Partially Completed",
-                                msg.warning,
-                                { durationMs: 15000, preservePreview: true }
-                            ), 0);
-                        }
+                        ui.showImage(msg.images, {
+                            warning: msg.warning,
+                            warningTitle: msg.warningTitle,
+                            failedDocuments: msg.failedDocuments || []
+                        });
                     } else if (msg.category === "shipment_failed" || msg.severityType === "ERROR") {
                         console.error("[Quick Ship] Shipment Error:", msg.error);
                         ui.showError(msg.error || "The shipment failed in Quick Ship.");

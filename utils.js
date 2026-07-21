@@ -18,6 +18,7 @@ function normalizeBase64Candidate(value) {
 
 function extractLabelData(content) {
     const results = [];
+    const documents = [];
     let detectedFormat = null;
 
     const jsonStrategies = [
@@ -37,13 +38,21 @@ function extractLabelData(content) {
         { key: "data", format: "TForce" }
     ];
 
-    const addCandidate = (value, format) => {
+    const addCandidate = (value, format, metadata = {}) => {
         if (typeof value !== "string") return;
         const clean = normalizeBase64Candidate(value);
-        if (isValidBase64(clean)) {
-            results.push(clean);
-            if (!detectedFormat) detectedFormat = format;
-        }
+        if (!isValidBase64(clean)) return;
+        results.push(clean);
+        documents.push({
+            data: clean,
+            format: format || metadata.docType || metadata.type || null,
+            contentType: metadata.contentType || null,
+            docType: metadata.docType || null,
+            type: metadata.type || null,
+            copiesToPrint: metadata.copiesToPrint,
+            sourceKey: metadata.sourceKey || null
+        });
+        if (!detectedFormat) detectedFormat = format;
     };
 
     // JSON Strategy
@@ -52,6 +61,15 @@ function extractLabelData(content) {
             const json = JSON.parse(content);
             const findInJson = (node) => {
                 if (!node || typeof node !== "object") return;
+                if (Object.prototype.hasOwnProperty.call(node, "encodedLabel")) {
+                    addCandidate(node.encodedLabel, node.docType || node.type || "FedEx", {
+                        contentType: node.contentType,
+                        docType: node.docType,
+                        type: node.type,
+                        copiesToPrint: node.copiesToPrint,
+                        sourceKey: "encodedLabel"
+                    });
+                }
                 for (const { key, format } of jsonStrategies) {
                     if (Object.prototype.hasOwnProperty.call(node, key)) {
                         const val = node[key];
@@ -177,7 +195,15 @@ function extractLabelData(content) {
     }
 
     const unique = [...new Set(results)];
-    if (unique.length > 0) return { data: unique, format: detectedFormat };
+    if (unique.length > 0) {
+        const seen = new Set();
+        const uniqueDocuments = documents.filter(document => {
+            if (!document.data || seen.has(document.data)) return false;
+            seen.add(document.data);
+            return true;
+        });
+        return { data: unique, format: detectedFormat, documents: uniqueDocuments };
+    }
     return null;
 }
 

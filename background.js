@@ -915,6 +915,53 @@ function sendLabelProcessingProgress(tabId, message, detail = "") {
     });
 }
 
+function normalizeDeclaredDocumentFormat(value) {
+    const text = String(value || "").trim().toUpperCase().replace(/[._ -]/g, "");
+    if (!text) return null;
+    if (text === "PDF" || text === "APPLICATION/PDF") return "pdf";
+    if (text === "ZPL" || text === "ZPLII" || text === "ZEBRA") return "zpl";
+    if (text === "PNG" || text === "IMAGE/PNG") return "png";
+    if (text === "JPG" || text === "JPEG" || text === "IMAGE/JPEG") return "jpeg";
+    if (text === "GIF" || text === "IMAGE/GIF") return "gif";
+    return null;
+}
+
+function detectSupportedDocumentFormat(base64, declaredFormat = null) {
+    const clean = String(base64 || "").trim().replace(/^data:[^;]+;base64,/i, "").replace(/\s/g, "");
+    if (!clean) return null;
+    if (clean.startsWith("JVBER")) return "pdf";
+    if (clean.startsWith("iVBORw0KGgo")) return "png";
+    if (clean.startsWith("/9j/")) return "jpeg";
+    if (clean.startsWith("R0lGOD")) return "gif";
+    try {
+        const decodedHeader = atob(clean.slice(0, 256));
+        if (decodedHeader.includes("%PDF")) return "pdf";
+        if (/\^XA/i.test(decodedHeader)) return "zpl";
+    } catch {
+        return null;
+    }
+    return normalizeDeclaredDocumentFormat(declaredFormat);
+}
+
+function getDocumentDisplayName(document, index) {
+    const raw = String(document && (document.contentType || document.type) || "").trim();
+    if (!raw || raw.toUpperCase() === "LABEL") return `Document ${index + 1}`;
+    return raw.toLowerCase().split("_").map(word => word ? word[0].toUpperCase() + word.slice(1) : "").join(" ");
+}
+
+function buildPartialPreviewWarning(failedDocuments) {
+    const failures = Array.isArray(failedDocuments) ? failedDocuments : [];
+    const names = [...new Set(failures.map(item => String(item && item.name || "").trim()).filter(Boolean))];
+    if (names.length === 1 && !/^Document \d+$/i.test(names[0])) {
+        return `The ${names[0]} could not be previewed.`;
+    }
+    if (names.length > 1 && names.every(name => !/^Document \d+$/i.test(name))) {
+        return `${names.join(", ")} could not be previewed.`;
+    }
+    const count = failures.length;
+    return `${count} additional document${count === 1 ? "" : "s"} could not be previewed.`;
+}
+
 /* Shared logic to extract, convert, and display label data from raw text/xml/json. */
 async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, signal = null) {
     try {
@@ -929,51 +976,56 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         }
 
         const { data: rawData, format } = extracted;
-        const dataList = Array.isArray(rawData) ? rawData : [rawData];
+        const rawList = Array.isArray(rawData) ? rawData : [rawData];
+        const extractedDocuments = Array.isArray(extracted.documents) && extracted.documents.length
+            ? extracted.documents
+            : rawList.map(data => ({ data, format }));
+        const previewCandidates = extractedDocuments
+            .map((document, originalIndex) => ({
+                ...document,
+                originalIndex,
+                detectedFormat: detectSupportedDocumentFormat(
+                    document.data,
+                    document.docType || document.type || document.format
+                )
+            }))
+            .filter(document => Boolean(document.detectedFormat));
         const processedImages = [];
         const failedDocuments = [];
 
-        for (const [dataIndex, base64] of dataList.entries()) {
+        if (previewCandidates.length === 0) {
+            if (isManualPreviewSource(historyLabel)) {
+                throw createManualPreviewError(fileContent, "no_valid_processed_labels");
+            }
+            throw new Error("No supported PDF, image, or ZPL documents were found.");
+        }
+
+        for (const [dataIndex, document] of previewCandidates.entries()) {
+            const base64 = document.data;
             sendLabelProcessingProgress(
                 tabId,
-                `Processing document ${dataIndex + 1} of ${dataList.length}...`,
+                `Processing document ${dataIndex + 1} of ${previewCandidates.length}...`,
                 "ZPL documents may pause briefly while the renderer observes its request limit."
             );
-            let isPdf = false;
-            let isPng = false;
-            let isJpg = false;
-            let isGif = false;
+            const documentName = getDocumentDisplayName(document, dataIndex);
+            const detectedFormat = document.detectedFormat;
 
-            try {
-                const b64Prefix = base64.trim().substring(0, 30);
-                if (b64Prefix.startsWith("JVBER")) isPdf = true;
-                else if (b64Prefix.startsWith("iVBORw0KGgo")) isPng = true;
-                else if (b64Prefix.startsWith("/9j/")) isJpg = true;
-                else if (b64Prefix.startsWith("R0lGODlh")) isGif = true;
-                else {
-                    const decodedHeader = atob(base64.substring(0, 50));
-                    if (decodedHeader.includes("%PDF")) {
-                        isPdf = true;
-                    }
-                }
-            } catch (e) { /* ignore */ }
-
-            if (isPdf) {
+            if (detectedFormat === "pdf") {
                 processedImages.push({
                     src: `data:application/pdf;base64,${base64}`,
                     type: "application/pdf"
                 });
-            } else if (isPng) {
+            } else if (detectedFormat === "png") {
                 processedImages.push({
                     src: `data:image/png;base64,${base64}`,
                     type: "image/png"
                 });
-            } else if (isJpg) {
+            } else if (detectedFormat === "jpeg") {
                 processedImages.push({
                     src: `data:image/jpeg;base64,${base64}`,
                     type: "image/jpeg"
                 });
-            } else if (isGif) {
+            } else if (detectedFormat === "gif") {
                 processedImages.push({
                     src: `data:image/gif;base64,${base64}`,
                     type: "image/gif"
@@ -985,13 +1037,13 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     zpl = atob(base64);
                 } catch (err) {
                     console.warn("Failed to decode base64 label data", err);
-                    failedDocuments.push({ index: dataIndex + 1, reason: "The encoded label could not be decoded." });
+                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The encoded label could not be decoded." });
                     continue;
                 }
 
                 zpl = zpl.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\0/g, "").trim();
                 if (!zpl) {
-                    failedDocuments.push({ index: dataIndex + 1, reason: "The decoded label was empty." });
+                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The decoded label was empty." });
                     continue;
                 }
 
@@ -999,7 +1051,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 // Most ZPL labels start with ^XA, but allow for some flexibility
                 if (!zpl.includes("^XA") && !zpl.includes("^xa")) {
                     console.warn("Skipping Labelary request: Decoded data does not appear to be valid ZPL (missing ^XA command).", zpl.substring(0, 100));
-                    failedDocuments.push({ index: dataIndex + 1, reason: "The decoded document was not recognized as PDF, image, or ZPL." });
+                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The decoded document was not recognized as PDF, image, or ZPL." });
                     continue;
                 }
 
@@ -1008,7 +1060,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     "Accept": "image/png"
                 };
 
-                switch (format) {
+                switch (document.format || format) {
                     case "UPS": labelaryHeaders["X-Rotation"] = "180"; break;
                     case "Loomis": labelaryHeaders["X-Rotation"] = "90"; break;
                     case "Canpar": labelaryHeaders["X-Rotation"] = "180"; break;
@@ -1025,7 +1077,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     signal,
                     {
                         documentIndex: dataIndex + 1,
-                        documentTotal: dataList.length,
+                        documentTotal: previewCandidates.length,
                         maxAttempts: 4,
                         baseDelayMs: 1500,
                         onRetryWait: ({ documentIndex, documentTotal, retryDelayMs }) => {
@@ -1046,10 +1098,10 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                         type: "image/png"
                     });
                 } else {
-                    failedDocuments.push({ index: dataIndex + 1, reason: "The label renderer could not produce an image." });
+                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The label renderer could not produce an image." });
                 }
 
-                if (dataIndex < dataList.length - 1) {
+                if (dataIndex < previewCandidates.length - 1) {
                     await sleep(1000);
                 }
             }
@@ -1088,7 +1140,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 images: processedImages,
                 warningTitle: failedCount ? "Preview Partially Completed" : undefined,
                 warning: failedCount
-                    ? `${processedImages.length} of ${dataList.length} documents were prepared. ${failedCount} document${failedCount === 1 ? "" : "s"} could not be produced.`
+                    ? buildPartialPreviewWarning(failedDocuments)
                     : undefined,
                 failedDocuments
             };
