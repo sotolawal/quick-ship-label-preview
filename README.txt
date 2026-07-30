@@ -23,6 +23,7 @@ Using the extension:
 1. Click the extension icon in your browser.
 2. Pin the extension for easier access.
 3. Ship, freight, or copy label data for preview. 
+4. The first time a Kinetic site uses a Quick Ship server on a different origin, approve it through Test & Save. Removing that connection revokes the approval.
 
 Key Features
 1. Quick Ship label preview
@@ -45,6 +46,10 @@ Key Features
 
 Supported Browsers
         Chrome, Microsoft Edge and other chromium browsers such as Brave, Opera, and Vivaldi.
+
+Development Checks
+1. Run `npm test` to execute the dependency-free regression tests.
+2. Run `npm run check` to validate the JavaScript syntax used by the extension.
 
 Supported Carriers
 - UPS

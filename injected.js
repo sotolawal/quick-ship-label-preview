@@ -19,13 +19,25 @@ function patchFetch() {
     const origFetch = window.__qsOrigFetch;
     //console.log("Original fetch stored-->", origFetch);
     window.fetch = async function(...args) {
+        const url = getFetchUrl(args);
+        const method = getFetchMethod(args);
+        const inspectRequest = isKineticFreightCartonUrl(url, method);
+        const inspectResponse = shouldInspectResponse(url, method);
+        const requestHeaders = inspectRequest || inspectResponse
+            ? getFetchRequestHeaders(args)
+            : {};
+
+        // Capture the request before awaiting the response so failed requests still
+        // provide useful context, but never read unrelated request bodies.
+        if (inspectRequest) {
+            processFetchRequestBody(args, url, requestHeaders, method);
+        }
+
         // console.log("Fetch called with args:", args);
         const response = await origFetch.apply(this, args);
         // console.log("Fetch response received");
-        const url = getFetchUrl(args);
-        const method = getFetchMethod(args);
-        const requestHeaders = getFetchRequestHeaders(args);
-        processFetchRequestBody(args, url, requestHeaders, method);
+        if (!inspectResponse) return response;
+
         // console.log("Processing fetch response for URL:", url);
         try {
             // Clone the response to read the body without consuming the original stream
@@ -79,6 +91,9 @@ function patchXHR() {
             // Log every state change for debugging
             // console.log(`[Quick Ship] XHR readyState: ${this.readyState} for URL: ${this._url}`);
             if (this.readyState === 4) { // DONE
+                if (!shouldInspectResponse(this.responseURL || this._url, this._method)) {
+                    return;
+                }
             /*  console.log("[Quick Ship] XHR Finished (readyState 4)", {
                     url: this._url,
                     status: this.status,
@@ -119,10 +134,26 @@ function patchXHR() {
 }
 // console.log("Made it past XHR patch");
 
+function shouldInspectResponse(url, method = "GET") {
+    const urlText = String(url || "");
+    const requestMethod = String(method || "GET").toUpperCase();
+    return /ShipShipment/i.test(urlText)
+        || isDirectShipmentLookupUrl(urlText, requestMethod)
+        || isKineticCustShipGetByIDUrl(urlText, requestMethod);
+}
+
+function getAbsoluteRequestUrl(value) {
+    try {
+        return new URL(String(value || ""), window.location.href).href;
+    } catch {
+        return String(value || "");
+    }
+}
+
 
 function safeProcessRequestText(txt, url, headers, method = "GET") {
     if (!txt || !url) return;
-    const urlText = String(url);
+    const urlText = getAbsoluteRequestUrl(url);
     const requestMethod = String(method || "GET").toUpperCase();
     if (!isKineticFreightCartonUrl(urlText, requestMethod)) return;
 
@@ -247,7 +278,7 @@ function safeProcessText(txt, url, headers, method = "GET") {
         return;
     }
 
-    const urlText = String(url);
+    const urlText = getAbsoluteRequestUrl(url);
     const requestMethod = String(method || "GET").toUpperCase();
     const isOriginalShipShipment = /ShipShipment/i.test(urlText);
     const isShipmentLookup = isDirectShipmentLookupUrl(urlText, requestMethod);

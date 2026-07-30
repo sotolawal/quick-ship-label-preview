@@ -16,10 +16,15 @@
     function injectInterceptor() {
         try {
             if (!chrome.runtime?.id) return; // Double check before access
+            const target = document.head || document.documentElement;
+            if (!target) {
+                setTimeout(injectInterceptor, 0);
+                return;
+            }
             const script = document.createElement("script");
             script.src = chrome.runtime.getURL("injected.js");
             script.onload = () => script.remove();
-            (document.head || document.documentElement).appendChild(script);
+            target.appendChild(script);
         } catch (err) {
             // Suppress context invalidation errors here
             if (!err.message.includes("Extension context invalidated")) {
@@ -28,17 +33,14 @@
         }
     }
 
-    if (document.readyState === "complete" || document.readyState === "interactive") {
-        injectInterceptor();
-    } else {
-        window.addEventListener("DOMContentLoaded", injectInterceptor);
-    }
+    injectInterceptor();
 
     // Class for UI Rendering
     class LabelPreviewUI {
         constructor() {
             this.hostId = "quick-ship-preview-host";
             this.shadowRoot = null;
+            this.p21ShadowRoot = null;
         }
 
         ensureHost() {
@@ -53,8 +55,8 @@
 
             host = document.createElement("div");
             host.id = this.hostId;
-            document.body.appendChild(host);
-            this.shadowRoot = host.attachShadow({ mode: "open" });
+            (document.body || document.documentElement).appendChild(host);
+            this.shadowRoot = host.attachShadow({ mode: "closed" });
             this.injectStyles();
             return this.shadowRoot;
         }
@@ -467,13 +469,15 @@
             }
 
             let host = document.getElementById(fabHostId);
-            if (host && host.shadowRoot) return host.shadowRoot;
+            if (host && this.p21ShadowRoot) return this.p21ShadowRoot;
+            if (host) host.remove();
 
             host = document.createElement("div");
             host.id = fabHostId;
-            document.body.appendChild(host);
+            (document.body || document.documentElement).appendChild(host);
 
-            const shadow = host.attachShadow({ mode: "open" });
+            const shadow = host.attachShadow({ mode: "closed" });
+            this.p21ShadowRoot = shadow;
             const style = document.createElement("style");
             style.textContent = `
                 :host { all: initial; font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -639,6 +643,7 @@
         removeP21Fab() {
             const host = document.getElementById("quick-ship-p21-fab-host");
             if (host) host.remove();
+            this.p21ShadowRoot = null;
         }
 
         setP21FabState(state, text) {
@@ -767,7 +772,9 @@
             const close = () => this.hideP21Toast();
             toast.querySelector("#qs-connection-close").addEventListener("click", close);
             toast.querySelector("#qs-connection-cancel").addEventListener("click", close);
-            const submit = () => {
+            const submit = (event) => {
+                // Only a real user gesture may approve a new cross-origin mapping.
+                if (event && !event.isTrusted) return;
                 const candidateBase = String(input.value || "").trim();
                 if (!candidateBase) { error.textContent = "Enter the browser-accessible Quick Ship URL."; input.focus(); return; }
                 error.textContent = "";
@@ -793,7 +800,9 @@
                 });
             };
             testBtn.addEventListener("click", submit);
-            input.addEventListener("keydown", event => { if (event.key === "Enter") submit(); });
+            input.addEventListener("keydown", event => {
+                if (event.key === "Enter") submit(event);
+            });
             toast.classList.add("qs-p21-toast-visible");
             setTimeout(() => input.focus(), 0);
         }
@@ -810,7 +819,9 @@
         }
         hideP21Toast() {
             const host = document.getElementById("quick-ship-p21-fab-host");
-            const toast = host && host.shadowRoot ? host.shadowRoot.getElementById("qs-p21-toast") : null;
+            const toast = host && this.p21ShadowRoot
+                ? this.p21ShadowRoot.getElementById("qs-p21-toast")
+                : null;
             if (toast) toast.classList.remove("qs-p21-toast-visible");
         }
 
@@ -840,7 +851,7 @@
         }
         updateLoading(message = "Processing label data...", detail = "") {
             const host = document.getElementById(this.hostId);
-            const shadow = host && host.shadowRoot;
+            const shadow = host && this.shadowRoot;
             const content = shadow && shadow.getElementById("qs-content");
             const status = shadow && shadow.getElementById("qs-status");
 
@@ -993,6 +1004,26 @@
     let p21FabResetTimer = null;
     let p21FabHidden = false;
 
+    function getContextLogSummary(context = {}) {
+        return {
+            sourceSystem: context.sourceSystem || null,
+            packID: context.packID || null,
+            shipmentNumber: context.shipmentNumber || context.mfTransNum || null,
+            erpSystem: context.erpSystem || null,
+            erpNumber: context.erpNumber || null,
+            baseUrl: context.quickShipBaseUrl || context.baseUrl || null,
+            contextSource: context.contextSource || null
+        };
+    }
+
+    function isSamePageOrigin(value) {
+        try {
+            return new URL(String(value || ""), window.location.href).origin === window.location.origin;
+        } catch {
+            return false;
+        }
+    }
+
     // Safest guard: clear any stale FAB host on content-script startup.
     // P21 pages recreate it once shipment context confirms erpSystem === "P21".
     try {
@@ -1111,7 +1142,7 @@
                 reason,
                 hasShipmentNumber: Boolean(shipmentNumber),
                 hasQuickShipBaseUrl: Boolean(quickShipBaseUrl),
-                context
+                context: getContextLogSummary(context)
             });
             return;
         }
@@ -1171,7 +1202,17 @@
                 kineticPackID,
                 baseUrl: quickShipBaseUrl,
                 freightURL: context.freightURL,
+                sourceUrl: context.freightSourceUrl || context.sourceUrl,
                 authHeaders: context.quickShipAuthHeaders || {}
+            }, (result) => {
+                if (result && result.requiresConnectionApproval) return;
+                if (chrome.runtime.lastError || (result && result.success === false)) {
+                    ui.showError(
+                        (result && result.error)
+                            || chrome.runtime.lastError?.message
+                            || "Failed to request the Kinetic label preview."
+                    );
+                }
             });
         } catch (err) {
             const message = err && err.message ? err.message : "Failed to request Kinetic label preview.";
@@ -1210,6 +1251,17 @@
                 erpNumber: context.erpNumber,
                 baseUrl,
                 authHeaders: context.authHeaders || {}
+            }, (result) => {
+                if (chrome.runtime.lastError || (result && result.success === false)) {
+                    ui.setP21FabState("retry", "Try Again");
+                    ui.showP21Toast(
+                        "P21 Packing List Error",
+                        (result && result.error)
+                            || chrome.runtime.lastError?.message
+                            || "Failed to request the P21 packing list.",
+                        { onRetry: requestP21PackingListPreview }
+                    );
+                }
             });
         } catch (err) {
             const message = err && err.message ? err.message : "Failed to request P21 packing list preview.";
@@ -1288,8 +1340,10 @@
 
     // Listen for shipment number for P21 Context
     window.addEventListener("qs_kinetic_label_context_found", (e) => {
-        const detail = e.detail || {};
+        const detail = e.detail && typeof e.detail === "object" ? e.detail : {};
         const packID = detail.kineticPackID || detail.packID;
+        const quickShipBaseUrl = detail.quickShipBaseUrl || detail.baseUrl;
+        if (!packID || !quickShipBaseUrl) return;
         latestKineticAutoPreviewKey = null;
         latestKineticFreightStartedAt = Date.now();
         latestKineticLabelContext = {
@@ -1301,23 +1355,25 @@
             mfTransNum: null,
             quickShipShipmentNumber: null,
             freightURL: detail.freightURL,
-            quickShipBaseUrl: detail.quickShipBaseUrl || detail.baseUrl,
-            baseUrl: detail.quickShipBaseUrl || detail.baseUrl,
+            quickShipBaseUrl,
+            baseUrl: quickShipBaseUrl,
             kineticBaseUrl: detail.kineticBaseUrl,
             kineticAuthHeaders: detail.kineticAuthHeaders || {},
             sourceUrl: detail.sourceUrl,
+            freightSourceUrl: detail.sourceUrl,
             contextSource: detail.contextSource || "kinetic-freight-carton",
             freightStartedAt: latestKineticFreightStartedAt
         };
         ui.removeP21Fab();
         maybeAutoPreviewKineticLabel("freight-context-updated");
-        console.log("[Quick Ship] Kinetic label context updated:", latestKineticLabelContext);
+        console.log("[Quick Ship] Kinetic label context updated:", getContextLogSummary(latestKineticLabelContext));
     });
 
     window.addEventListener("qs_kinetic_mftransnum_found", (e) => {
-        const detail = e.detail || {};
+        const detail = e.detail && typeof e.detail === "object" ? e.detail : {};
         const kineticPackID = detail.kineticPackID || detail.packID;
         const shipmentNumber = detail.shipmentNumber || detail.mfTransNum;
+        if (!shipmentNumber) return;
         const previousShipmentNumber = latestKineticLabelContext && (latestKineticLabelContext.shipmentNumber || latestKineticLabelContext.mfTransNum || latestKineticLabelContext.quickShipShipmentNumber);
         if (shipmentNumber && String(shipmentNumber) !== String(previousShipmentNumber || "")) {
             latestKineticAutoPreviewKey = null;
@@ -1333,19 +1389,22 @@
             kineticBaseUrl: detail.kineticBaseUrl || (latestKineticLabelContext && latestKineticLabelContext.kineticBaseUrl),
             kineticAuthHeaders: detail.kineticAuthHeaders || (latestKineticLabelContext && latestKineticLabelContext.kineticAuthHeaders) || {},
             sourceUrl: detail.sourceUrl,
+            freightSourceUrl: latestKineticLabelContext && latestKineticLabelContext.freightSourceUrl,
             contextSource: "kinetic-custship-getbyid",
             freightStartedAt: latestKineticFreightStartedAt || (latestKineticLabelContext && latestKineticLabelContext.freightStartedAt) || Date.now()
         };
         ui.removeP21Fab();
-        console.log("[Quick Ship] Kinetic MFTransNum context merged:", latestKineticLabelContext);
+        console.log("[Quick Ship] Kinetic MFTransNum context merged:", getContextLogSummary(latestKineticLabelContext));
         maybeAutoPreviewKineticLabel("mftransnum-context-updated");
     });
 
     window.addEventListener("qs_shipment_context_found", (e) => {
+        const detail = e.detail && typeof e.detail === "object" ? e.detail : {};
+        const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber } = detail;
+        if (!(shipmentNumber || packID) || !isSamePageOrigin(baseUrl)) return;
         latestKineticLabelContext = null;
         latestKineticAutoPreviewKey = null;
         latestKineticFreightStartedAt = 0;
-        const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber } = e.detail || {};
         latestShipmentContext = {
             packID,
             shipmentNumber: shipmentNumber || packID,
@@ -1355,16 +1414,18 @@
             erpNumber: erpNumber || null
         };
         attachP21FabHandler();
-        console.log("[Quick Ship] Shipment context updated without preview workflow:", latestShipmentContext);
+        console.log("[Quick Ship] Shipment context updated without preview workflow:", getContextLogSummary(latestShipmentContext));
     });
 
 
     // Listen for PackID detection from Injected Script
     window.addEventListener("label_packid_found", async (e) => {
+        const detail = e.detail && typeof e.detail === "object" ? e.detail : {};
+        const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber, shipmentFailure } = detail;
+        if (!packID || !isSamePageOrigin(baseUrl)) return;
         latestKineticLabelContext = null;
         latestKineticAutoPreviewKey = null;
         latestKineticFreightStartedAt = 0;
-        const { packID, shipmentNumber, baseUrl, authHeaders, erpSystem, erpNumber, shipmentFailure } = e.detail;
 
         latestShipmentContext = {
             packID,
@@ -1402,6 +1463,14 @@
                 baseUrl: baseUrl,
                 authHeaders: authHeaders,
                 shipmentFailure: shipmentFailure || null
+            }, (result) => {
+                if (chrome.runtime.lastError || (result && result.success === false && !result.paused)) {
+                    ui.showError(
+                        (result && result.error)
+                            || chrome.runtime.lastError?.message
+                            || "The label preview request could not be completed."
+                    );
+                }
             });
             console.log("[Quick Ship] Message sent to background script");
         } catch (err) {

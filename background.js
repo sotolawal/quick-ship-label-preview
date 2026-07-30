@@ -1,13 +1,14 @@
 console.log("Background service worker loaded!");
-importScripts("utils.js");
+importScripts("utils.js", "resolver.js");
 
 chrome.runtime.onStartup.addListener(() => {
     console.log("Service worker started (onStartup)");
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
     console.log("Service worker installed (onInstalled)");
 
+    await chrome.contextMenus.removeAll();
     chrome.contextMenus.create({
         id: "qs-preview-label",
         title: "Preview",
@@ -15,53 +16,70 @@ chrome.runtime.onInstalled.addListener(() => {
     });
 });
 
-// Keep the worker alive every 20 seconds
-chrome.alarms.create("keepAlive", { periodInMinutes: 0.3 });
+const HANDLED_RUNTIME_MESSAGE_TYPES = new Set([
+    "testQuickShipConnection",
+    "saveQuickShipBaseOverride",
+    "packID",
+    "analyzeText",
+    "openViewer",
+    "previewKineticLabel",
+    "previewP21PackingList"
+]);
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === "keepAlive") {
-        console.log("KeepAlive ping");
-    }
-});
-
-// Check if PackID message is successfully received.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "testQuickShipConnection") {
-        testQuickShipConnection(msg.candidateBase, msg.authHeaders || {})
-            .then(sendResponse)
-            .catch(err => sendResponse({
-                success: false,
-                error: err.message || "Connection test failed."
-            }));
-        return true;
-    }
+    if (!msg || !HANDLED_RUNTIME_MESSAGE_TYPES.has(msg.type)) return false;
 
-    if (msg.type === "saveQuickShipBaseOverride") {
-        saveQuickShipBaseOverride(msg.configuredBase, msg.candidateBase, msg.authHeaders || {})
-            .then(sendResponse)
-            .catch(err => sendResponse({
+    handleRuntimeMessage(msg, sender)
+        .then(result => sendResponse(result || { success: true }))
+        .catch(err => {
+            console.error("[Quick Ship] Runtime message failed:", msg.type, err);
+            sendResponse({
                 success: false,
-                error: err.message || "Unable to save the connection."
-            }));
-        return true;
-    }
-
-    void handleRuntimeMessage(msg, sender);
-    return false;
+                error: err && err.message ? err.message : "The request could not be completed."
+            });
+        });
+    return true;
 });
 
 async function handleRuntimeMessage(msg, sender) {
+    if (msg.type === "testQuickShipConnection") {
+        requireExtensionSender(sender, "Connection tests");
+        return testQuickShipConnection(msg.candidateBase, msg.authHeaders || {});
+    }
+
+    if (msg.type === "saveQuickShipBaseOverride") {
+        return saveQuickShipBaseOverride(
+            msg.configuredBase,
+            msg.candidateBase,
+            msg.authHeaders || {},
+            sender
+        );
+    }
+
     if (msg.type === "packID") {
+        const tabId = requireSenderTabId(sender);
+        if (!(await isQuickShipBaseAllowedForSender(msg.baseUrl, sender))) {
+            throw new Error("Blocked a Quick Ship request whose address was not approved for this page.");
+        }
+
         // Check if paused
         const settings = await chrome.storage.local.get("isPaused");
         if (settings.isPaused) {
             console.log("[Quick Ship] Processing skipped (Paused):", msg.packID);
-            return;
+            return { success: false, paused: true };
         }
 
-        await handlePackID(msg.packID, msg.baseUrl, sender.tab.id, msg.authHeaders, msg.shipmentFailure || null);
+        await handlePackID(
+            msg.packID,
+            msg.baseUrl,
+            tabId,
+            sanitizeAuthHeaders(msg.authHeaders),
+            msg.shipmentFailure || null
+        );
         console.log("[Quick Ship] PackID message processed:", msg.packID);
+        return { success: true };
     } else if (msg.type === "analyzeText") {
+        requireExtensionSender(sender, "Clipboard previews");
         // Handle clipboard content
         let tabId = sender.tab ? sender.tab.id : null;
         let url = sender.tab ? sender.tab.url : "Popup";
@@ -88,10 +106,26 @@ async function handleRuntimeMessage(msg, sender) {
         } catch (e) { /* ignore */ }
 
         await processLabelContent(text, tabId, "Clipboard", url);
+        return { success: true };
     } else if (msg.type === "openViewer") {
-        await openViewerTab(msg.images || [], msg.metadata || {});
+        requireExtensionSender(sender, "Viewer requests");
+        const previewId = await openViewerTab(msg.images || [], msg.metadata || {});
+        return { success: true, previewId };
     } else if (msg.type === "previewKineticLabel") {
-        const tabId = sender.tab ? sender.tab.id : null;
+        const tabId = requireSenderTabId(sender);
+        if (!isSameOrigin(msg.sourceUrl, sender.tab && sender.tab.url)
+            || !isKineticFreightCartonSourceUrl(msg.sourceUrl, sender.tab && sender.tab.url)) {
+            throw new Error("Blocked a Kinetic preview request with an invalid source page.");
+        }
+        if (!(await isQuickShipBaseAllowedForSender(msg.baseUrl, sender))) {
+            sendQuickShipConnectionRequired(
+                tabId,
+                msg.baseUrl,
+                msg.baseUrl,
+                new Error("Approve this Quick Ship connection before using it from Kinetic.")
+            );
+            return { success: false, requiresConnectionApproval: true };
+        }
         await handleKineticLabelPreview({
             packID: msg.packID,
             shipmentNumber: msg.shipmentNumber,
@@ -99,19 +133,26 @@ async function handleRuntimeMessage(msg, sender) {
             kineticPackID: msg.kineticPackID,
             baseUrl: msg.baseUrl,
             freightURL: msg.freightURL,
-            authHeaders: msg.authHeaders || {},
+            authHeaders: sanitizeAuthHeaders(msg.authHeaders),
             tabId,
             livePreviewStartedAt: msg.livePreviewStartedAt
         });
+        return { success: true };
     } else if (msg.type === "previewP21PackingList") {
-        const tabId = sender.tab ? sender.tab.id : null;
+        const tabId = requireSenderTabId(sender);
+        if (!(await isQuickShipBaseAllowedForSender(msg.baseUrl, sender))) {
+            throw new Error("Blocked a P21 request whose Quick Ship address was not approved for this page.");
+        }
         await handleP21PackingListPreview({
             shipmentLookupNumber: msg.shipmentNumber || msg.quickShipShipmentNumber || msg.erpNumber,
             baseUrl: msg.baseUrl,
-            authHeaders: msg.authHeaders || {},
+            authHeaders: sanitizeAuthHeaders(msg.authHeaders),
             tabId
         });
+        return { success: true };
     }
+
+    return { success: false, error: "Unsupported request type." };
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -126,6 +167,76 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 const activeRequests = new Map();
 const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
+const QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY = "quickShipSourceTrust";
+const ALLOWED_AUTH_HEADER_NAMES = new Map([
+    ["authorization", "Authorization"],
+    ["registrationcode", "Registrationcode"]
+]);
+const DEFAULT_FETCH_TIMEOUT_MS = 20000;
+
+function requireSenderTabId(sender) {
+    const tabId = sender && sender.tab && sender.tab.id;
+    if (!Number.isInteger(tabId)) {
+        throw new Error("This request must come from a browser tab.");
+    }
+    return tabId;
+}
+
+function isExtensionSender(sender) {
+    const senderUrl = String(sender && sender.url || "");
+    return senderUrl.startsWith(chrome.runtime.getURL(""));
+}
+
+function requireExtensionSender(sender, actionName = "This action") {
+    if (!isExtensionSender(sender)) {
+        throw new Error(`${actionName} can only be started from the extension.`);
+    }
+}
+
+function getUrlOrigin(value, baseUrl = "") {
+    try {
+        const parsed = baseUrl
+            ? new URL(String(value || ""), String(baseUrl))
+            : new URL(String(value || ""));
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+        return parsed.origin.toLowerCase();
+    } catch {
+        return "";
+    }
+}
+
+function isSameOrigin(first, second) {
+    const firstOrigin = getUrlOrigin(first, second);
+    return Boolean(firstOrigin && firstOrigin === getUrlOrigin(second));
+}
+
+function isKineticFreightCartonSourceUrl(value, baseUrl = "") {
+    try {
+        const parsed = baseUrl
+            ? new URL(String(value || ""), String(baseUrl))
+            : new URL(String(value || ""));
+        return /\/Erp\.BO\.FreightServiceSvc\/FreightCarton\/?$/i.test(parsed.pathname);
+    } catch {
+        return false;
+    }
+}
+
+function sanitizeAuthHeaders(headers = {}) {
+    const sanitized = {};
+    if (!headers || typeof headers !== "object" || Array.isArray(headers)) return sanitized;
+
+    for (const [name, value] of Object.entries(headers)) {
+        const allowedName = ALLOWED_AUTH_HEADER_NAMES.get(String(name).toLowerCase());
+        if (!allowedName || typeof value !== "string" || value.length > 8192) continue;
+        sanitized[allowedName] = value;
+    }
+    return sanitized;
+}
+
+function authHeadersForTarget(headers, targetUrl, authBaseUrl) {
+    if (!isSameOrigin(targetUrl, authBaseUrl)) return {};
+    return sanitizeAuthHeaders(headers);
+}
 
 function normalizeQuickShipBase(value) {
     const raw = String(value || "").trim();
@@ -133,17 +244,46 @@ function normalizeQuickShipBase(value) {
     const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
     try {
         const parsed = new URL(withProtocol);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
         const marker = "/EpicorFreightService.svc";
         const markerIndex = parsed.pathname.toLowerCase().indexOf(marker.toLowerCase());
         const basePath = markerIndex >= 0 ? parsed.pathname.slice(0, markerIndex) : parsed.pathname;
         return `${parsed.origin}${basePath}`.replace(/\/$/, "");
     } catch {
-        return withProtocol.replace(/\/$/, "");
+        return "";
     }
 }
 function quickShipOverrideKey(value) {
     return normalizeQuickShipBase(value).toLowerCase();
 }
+
+async function isQuickShipBaseAllowedForSender(baseUrl, sender) {
+    if (isExtensionSender(sender)) return true;
+
+    const senderOrigin = getUrlOrigin(sender && sender.tab && sender.tab.url);
+    const normalizedBase = normalizeQuickShipBase(baseUrl);
+    if (!senderOrigin || !normalizedBase) return false;
+    if (getUrlOrigin(normalizedBase) === senderOrigin) return true;
+
+    const stored = await chrome.storage.local.get(QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY);
+    const trust = stored[QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY] || {};
+    const trustedBases = Array.isArray(trust[senderOrigin]) ? trust[senderOrigin] : [];
+    return trustedBases.includes(quickShipOverrideKey(normalizedBase));
+}
+
+async function rememberTrustedQuickShipSource(sender, configuredBase) {
+    const sourceOrigin = getUrlOrigin(sender && sender.tab && sender.tab.url);
+    const configuredKey = quickShipOverrideKey(configuredBase);
+    if (!sourceOrigin || !configuredKey) return;
+
+    const stored = await chrome.storage.local.get(QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY);
+    const trust = { ...(stored[QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY] || {}) };
+    const trustedBases = new Set(Array.isArray(trust[sourceOrigin]) ? trust[sourceOrigin] : []);
+    trustedBases.add(configuredKey);
+    trust[sourceOrigin] = [...trustedBases];
+    await chrome.storage.local.set({ [QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY]: trust });
+}
+
 async function getEffectiveQuickShipBase(configuredBase) {
     const normalizedConfigured = normalizeQuickShipBase(configuredBase);
     if (!normalizedConfigured) return { configuredBase: "", effectiveBase: "", overridden: false };
@@ -158,9 +298,13 @@ async function getEffectiveQuickShipBase(configuredBase) {
 }
 async function testQuickShipConnection(candidateBase, authHeaders = {}) {
     const normalized = normalizeQuickShipBase(candidateBase);
-    if (!normalized) return { success: false, error: "Enter a Quick Ship base URL." };
+    if (!normalized) return { success: false, error: "Enter a valid HTTP or HTTPS Quick Ship base URL." };
     try {
-        const response = await fetch(`${normalized}/api/downloads/getCarrierXMLs`, { headers: authHeaders || {} });
+        const response = await fetchWithTimeout(
+            `${normalized}/api/downloads/getCarrierXMLs`,
+            { headers: sanitizeAuthHeaders(authHeaders) },
+            15000
+        );
         if (!response.ok) {
             return { success: false, reachable: true, status: response.status, candidateBase: normalized, error: `Quick Ship responded with HTTP ${response.status}.` };
         }
@@ -172,16 +316,63 @@ async function testQuickShipConnection(candidateBase, authHeaders = {}) {
         return { success: false, reachable: false, candidateBase: normalized, error: "Quick Ship could not be reached at this address." };
     }
 }
-async function saveQuickShipBaseOverride(configuredBase, candidateBase, authHeaders = {}) {
+async function saveQuickShipBaseOverride(configuredBase, candidateBase, authHeaders = {}, sender = null) {
+    if (!isExtensionSender(sender) && !(sender && sender.tab)) {
+        throw new Error("Connection changes must come from an extension page or an active browser tab.");
+    }
     const configured = normalizeQuickShipBase(configuredBase);
-    if (!configured) return { success: false, error: "The configured Kinetic Quick Ship address is required." };
+    if (!configured) return { success: false, error: "A valid configured Quick Ship HTTP or HTTPS address is required." };
     const tested = await testQuickShipConnection(candidateBase, authHeaders);
     if (!tested.success) return tested;
     const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
     const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
     mappings[quickShipOverrideKey(configured)] = tested.candidateBase;
     await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings });
+    await rememberTrustedQuickShipSource(sender, configured);
     return { success: true, configuredBase: configured, effectiveBase: tested.candidateBase };
+}
+
+async function fetchWithTimeout(input, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
+    const timeout = Number(timeoutMs);
+    const externalSignal = init && init.signal;
+    const controller = new AbortController();
+    let timedOut = false;
+    let timeoutId = null;
+
+    const forwardAbort = () => {
+        controller.abort(externalSignal && externalSignal.reason);
+    };
+
+    if (externalSignal) {
+        if (externalSignal.aborted) {
+            forwardAbort();
+        } else {
+            externalSignal.addEventListener("abort", forwardAbort, { once: true });
+        }
+    }
+
+    if (Number.isFinite(timeout) && timeout > 0) {
+        timeoutId = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, timeout);
+    }
+
+    try {
+        return await fetch(input, { ...init, signal: controller.signal });
+    } catch (err) {
+        if (timedOut) {
+            const timeoutError = new Error(`Request timed out after ${Math.ceil(timeout / 1000)} seconds.`);
+            timeoutError.name = "TimeoutError";
+            throw timeoutError;
+        }
+        throw err;
+    } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+        if (externalSignal) {
+            externalSignal.removeEventListener("abort", forwardAbort);
+        }
+    }
 }
 function isQuickShipNetworkFailure(err) {
     if (!err || err.name === "AbortError") return false;
@@ -327,7 +518,11 @@ async function getQuickShipShipmentFailureInfo(cleanBase, shipmentNumber, authHe
     const lookup = String(shipmentNumber || "").trim();
     if (!cleanBase || !lookup) return null;
     try {
-        const resp = await fetch(`${cleanBase}/api/shipments/${encodeURIComponent(lookup)}`, { headers: authHeaders || {}, signal: signal || undefined });
+        const url = `${cleanBase}/api/shipments/${encodeURIComponent(lookup)}`;
+        const resp = await fetchWithTimeout(url, {
+            headers: authHeadersForTarget(authHeaders, url, cleanBase),
+            signal: signal || undefined
+        });
         if (!resp.ok) return null;
         return getShipmentFailureInfo(await resp.json());
     } catch (err) {
@@ -416,12 +611,19 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipme
         let attempt = 0;
         do {
             attempt++;
-            const files = await getCarrierXmlFiles(cleanBase, authHeaders || {});
-            resolved = await resolveBestLabelFileForLookup(files, lookupNumber, signal, { ...previewOptions, liveMode, startedAt: liveStartedAt });
+            const files = await getCarrierXmlFiles(cleanBase, authHeaders || {}, signal);
+            resolved = await resolveBestLabelFileForLookup(files, lookupNumber, signal, {
+                ...previewOptions,
+                liveMode,
+                startedAt: liveStartedAt,
+                authHeaders: authHeaders || {},
+                authBaseUrl: cleanBase,
+                configuredBase
+            });
             if (resolved && resolved.text) break;
             if (!liveMode || Date.now() - startedWaitingAt >= maxWaitMs) break;
             console.log("[Quick Ship] Live label not ready yet; retrying CarrierXML resolution.", { lookupNumber, attempt, elapsedMs: Date.now() - startedWaitingAt, maxWaitMs });
-            await sleep(retryDelayMs);
+            await sleep(retryDelayMs, signal);
         } while (!signal.aborted);
         if (!resolved || !resolved.text) {
             sendError(liveMode ? `Label is not ready yet for ${lookupNumber}. Quick Ship may still be generating the carrier response. Try again in a moment.` : `Failed to preview label. No label-bearing CarrierXML file was found for ${lookupNumber}.`);
@@ -455,22 +657,11 @@ async function handlePackID(packID, baseUrl, tabId, authHeaders, immediateShipme
     }
 }
 
-function normalizeLookupValue(value) {
-    const text = String(value ?? "").trim();
-    if (!text || text === "0" || text.toLowerCase() === "null" || text.toLowerCase() === "undefined") return null;
-    return text;
-}
-
-
-function escapeRegex(value) {
-    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function fileNameHasLookupToken(fileName, lookup) {
-    const name = String(fileName || "");
-    const token = String(lookup || "").trim();
-    if (!name || !token) return false;
-    return new RegExp(`(^|[^A-Za-z0-9])${escapeRegex(token)}([^A-Za-z0-9]|$)`, "i").test(name);
-}
+const {
+    normalizeLookupValue,
+    fileNameHasLookupToken,
+    resolveQuickShipResourceUrl
+} = self.QuickShipResolverUtils;
 
 const LIVE_FILE_TIME_TOLERANCE_MS = 90 * 1000;
 
@@ -487,8 +678,23 @@ function getLiveResolverStartedAt(options = {}) {
     const startedAt = Number(options && options.startedAt);
     return Number.isFinite(startedAt) && startedAt > 0 ? startedAt : 0;
 }
-async function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+async function sleep(ms, signal = null) {
+    if (signal && signal.aborted) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+    }
+
+    return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+            if (signal) signal.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timeoutId);
+            signal.removeEventListener("abort", onAbort);
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+        };
+        if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    });
 }
 
 
@@ -504,12 +710,12 @@ async function renderZplWithRetry(zpl, headers, signal = null, options = {}) {
             throw new DOMException("The operation was aborted.", "AbortError");
         }
 
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
             method: "POST",
             headers,
             body: zpl,
             signal: signal || undefined
-        });
+        }, 25000);
 
         if (response.ok) {
             if (attempt > 1) {
@@ -552,7 +758,7 @@ async function renderZplWithRetry(zpl, headers, signal = null, options = {}) {
         if (typeof options.onRetryWait === "function") {
             options.onRetryWait({ documentIndex, documentTotal, attempt, retryDelayMs });
         }
-        await sleep(retryDelayMs);
+        await sleep(retryDelayMs, signal);
     }
 
     return null;
@@ -652,10 +858,15 @@ function collectShipmentCluesFromText(text, initialLookup = null) {
     return clues;
 }
 
-async function fetchCarrierFileText(file, signal) {
+async function fetchCarrierFileText(file, signal, authHeaders = {}, authBaseUrl = "", configuredBase = authBaseUrl) {
     if (!file || !file.url) return null;
+    const targetUrl = resolveQuickShipResourceUrl(file.url, authBaseUrl, configuredBase);
+    if (!targetUrl) return null;
     try {
-        const resp = await fetch(file.url, { signal });
+        const resp = await fetchWithTimeout(targetUrl, {
+            headers: authHeadersForTarget(authHeaders, targetUrl, authBaseUrl),
+            signal
+        });
         if (!resp.ok) {
             console.warn("[Quick Ship] Candidate CarrierXML fetch failed:", file.fileName, resp.status);
             return null;
@@ -677,33 +888,22 @@ function textHasExtractableLabelData(text) {
     }
 }
 
-function hasAnyClueInFileName(file, clues, options = {}) {
-    const name = String(file && file.fileName || "").toLowerCase();
+function hasAnyClueInFileName(file, clues) {
+    const name = String(file && file.fileName || "");
     if (!name) return false;
-    const liveMode = isLiveResolverOptions(options);
     return [...clues].some(clue => {
         if (!clue) return false;
-        const clueText = String(clue);
-        return (liveMode || /^\d+$/.test(clueText))
-            ? fileNameHasLookupToken(name, clueText)
-            : name.includes(clueText.toLowerCase());
+        return fileNameHasLookupToken(name, String(clue));
     });
 }
 
-function isNearAnySeedTime(file, seedTimes, windowMs = 5 * 60 * 1000) {
-    const t = getFileTime(file);
-    if (!t || !Array.isArray(seedTimes) || seedTimes.length === 0) return false;
-    return seedTimes.some(seed => seed && Math.abs(t - seed) <= windowMs);
-}
-
-function scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet, options = {}) {
+function scoreCarrierCandidate(file, clues, directMatchesSet, options = {}) {
     const name = String(file && file.fileName || "").toLowerCase();
     const liveMode = isLiveResolverOptions(options);
     const startedAt = getLiveResolverStartedAt(options);
     let score = 0;
     if (directMatchesSet && directMatchesSet.has(file)) score += 80;
-    if (hasAnyClueInFileName(file, clues, options)) score += liveMode ? 120 : 70;
-    if (!liveMode && isNearAnySeedTime(file, seedTimes)) score += 45;
+    if (hasAnyClueInFileName(file, clues)) score += liveMode ? 120 : 70;
     if (liveMode) {
         const t = getFileTime(file);
         const minimumLiveFileTime = startedAt - LIVE_FILE_TIME_TOLERANCE_MS;
@@ -730,9 +930,9 @@ function uniqueFiles(files) {
     return output;
 }
 
-function sortCarrierCandidates(files, clues, seedTimes, directMatchesSet, options = {}) {
+function sortCarrierCandidates(files, clues, directMatchesSet, options = {}) {
     return uniqueFiles(files)
-        .map(file => ({ file, score: scoreCarrierCandidate(file, clues, seedTimes, directMatchesSet, options), time: getFileTime(file) }))
+        .map(file => ({ file, score: scoreCarrierCandidate(file, clues, directMatchesSet, options), time: getFileTime(file) }))
         .sort((a, b) => b.score !== a.score ? b.score - a.score : b.time - a.time)
         .map(item => item.file);
 }
@@ -747,7 +947,7 @@ async function resolveBestLabelFileForLookup(files, lookupNumber, signal, option
     const directMatches = files.filter(file => {
         if (!file || !file.fileName) return false;
         if (liveMode && !fileIsNewEnoughForLivePreview(file, startedAt)) return false;
-        return liveMode ? fileNameHasLookupToken(file.fileName, lookup) : file.fileName.includes(lookup);
+        return fileNameHasLookupToken(file.fileName, lookup);
     });
     if (directMatches.length === 0) {
         const tokenMatchesIgnoringTime = files.filter(file =>
@@ -768,14 +968,19 @@ async function resolveBestLabelFileForLookup(files, lookupNumber, signal, option
         return null;
     }
     const directMatchesSet = new Set(directMatches);
-    const seedTimes = directMatches.map(getFileTime).filter(Boolean);
     const tested = new Set();
     const discoveredClues = new Set(initialClues);
     const probeCandidate = async (file, reason) => {
         if (!file || !file.url || tested.has(file.url)) return null;
         if (liveMode && !fileIsNewEnoughForLivePreview(file, startedAt)) return null;
         tested.add(file.url);
-        const text = await fetchCarrierFileText(file, signal);
+        const text = await fetchCarrierFileText(
+            file,
+            signal,
+            options.authHeaders || {},
+            options.authBaseUrl || "",
+            options.configuredBase || options.authBaseUrl || ""
+        );
         if (!text) return null;
         const newClues = collectShipmentCluesFromText(text, lookup);
         newClues.forEach(clue => discoveredClues.add(clue));
@@ -783,17 +988,17 @@ async function resolveBestLabelFileForLookup(files, lookupNumber, signal, option
         console.log("[Quick Ship] Candidate did not contain label data:", { fileName: file.fileName, reason, liveMode, discoveredClues: [...discoveredClues] });
         return null;
     };
-    for (const file of sortCarrierCandidates(directMatches, discoveredClues, seedTimes, directMatchesSet, options).slice(0, liveMode ? 20 : 12)) {
+    for (const file of sortCarrierCandidates(directMatches, discoveredClues, directMatchesSet, options).slice(0, liveMode ? 20 : 12)) {
         const resolved = await probeCandidate(file, "direct-lookup-match");
         if (resolved) return resolved;
     }
     const expandedCandidates = files.filter(file => {
         if (!file || !file.fileName || tested.has(file.url)) return false;
         if (liveMode && !fileIsNewEnoughForLivePreview(file, startedAt)) return false;
-        return liveMode ? hasAnyClueInFileName(file, discoveredClues, options) : hasAnyClueInFileName(file, discoveredClues, options) || isNearAnySeedTime(file, seedTimes);
+        return hasAnyClueInFileName(file, discoveredClues);
     });
-    for (const file of sortCarrierCandidates(expandedCandidates, discoveredClues, seedTimes, directMatchesSet, options).slice(0, liveMode ? 20 : 40)) {
-        const resolved = await probeCandidate(file, liveMode ? "live-expanded-token-match" : "expanded-clue-or-time-match");
+    for (const file of sortCarrierCandidates(expandedCandidates, discoveredClues, directMatchesSet, options).slice(0, liveMode ? 20 : 40)) {
+        const resolved = await probeCandidate(file, liveMode ? "live-expanded-token-match" : "expanded-clue-token-match");
         if (resolved) return resolved;
     }
     console.warn("[Quick Ship] No label-bearing CarrierXML was found after probing candidates.", { lookup, liveMode, startedAt, directMatchCount: directMatches.length, expandedCandidateCount: expandedCandidates.length, clues: [...discoveredClues] });
@@ -1102,7 +1307,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 }
 
                 if (dataIndex < previewCandidates.length - 1) {
-                    await sleep(1000);
+                    await sleep(1000, signal);
                 }
             }
         }
@@ -1197,15 +1402,32 @@ async function openViewerTab(images, metadata = {}) {
         images
     };
 
-    await chrome.storage.session.set({
-        [storageKey]: previewPayload
-    });
-    cleanupOldViewerPreviews().catch((err) => {
-        console.warn("[Quick Ship] Viewer preview cleanup failed:", err);
-    });
+    await cleanupOldViewerPreviews();
+
+    try {
+        await chrome.storage.session.set({
+            [storageKey]: previewPayload
+        });
+    } catch (sessionError) {
+        // storage.session has a fixed 10 MB total quota. storage.local is
+        // unlimited for this extension and the viewer removes the item on read.
+        console.warn("[Quick Ship] Session preview storage unavailable; using local storage:", sessionError);
+        await chrome.storage.local.set({
+            [storageKey]: previewPayload
+        });
+    }
 
     const viewerUrl = chrome.runtime.getURL(`viewer.html?id=${encodeURIComponent(previewId)}`);
-    await chrome.tabs.create({ url: viewerUrl });
+    try {
+        await chrome.tabs.create({ url: viewerUrl });
+    } catch (err) {
+        await Promise.allSettled([
+            chrome.storage.session.remove(storageKey),
+            chrome.storage.local.remove(storageKey)
+        ]);
+        throw err;
+    }
+    return previewId;
 }
 
 function createPreviewId() {
@@ -1217,13 +1439,28 @@ function createPreviewId() {
 }
 
 async function cleanupOldViewerPreviews(maxAgeMs = 60 * 60 * 1000) {
-    if (!chrome.storage || !chrome.storage.session) return;
+    if (!chrome.storage) return;
+    await Promise.all([
+        cleanupOldViewerPreviewsInArea(chrome.storage.session, maxAgeMs),
+        cleanupOldViewerPreviewsInArea(chrome.storage.local, maxAgeMs)
+    ]);
+}
 
-    const allSessionItems = await chrome.storage.session.get(null);
+async function cleanupOldViewerPreviewsInArea(storageArea, maxAgeMs) {
+    if (!storageArea) return;
+    let previewKeys = [];
+    if (typeof storageArea.getKeys === "function") {
+        previewKeys = (await storageArea.getKeys()).filter(key => key.startsWith("preview:"));
+    }
+    const allItems = previewKeys.length > 0
+        ? await storageArea.get(previewKeys)
+        : typeof storageArea.getKeys === "function"
+            ? {}
+            : await storageArea.get(null);
     const now = Date.now();
     const keysToRemove = [];
 
-    for (const [key, value] of Object.entries(allSessionItems)) {
+    for (const [key, value] of Object.entries(allItems)) {
         if (!key.startsWith("preview:")) continue;
 
         const createdAt = value && typeof value.createdAt === "number"
@@ -1236,7 +1473,7 @@ async function cleanupOldViewerPreviews(maxAgeMs = 60 * 60 * 1000) {
     }
 
     if (keysToRemove.length > 0) {
-        await chrome.storage.session.remove(keysToRemove);
+        await storageArea.remove(keysToRemove);
     }
 }
 
@@ -1321,7 +1558,12 @@ async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, auth
             throw new Error("Unable to determine the Quick Ship base URL for this shipment page.");
         }
 
-        const cleanBase = baseUrl.replace(/\/$/, "");
+        const baseResolution = await getEffectiveQuickShipBase(baseUrl);
+        const configuredBase = baseResolution.configuredBase;
+        const cleanBase = baseResolution.effectiveBase;
+        if (!cleanBase) {
+            throw new Error("The Quick Ship base URL is invalid.");
+        }
         const shipmentInfo = await getShipmentInfoForP21(cleanBase, shipmentLookupNumber, authHeaders);
 
         if (!shipmentInfo || !shipmentInfo.isP21) {
@@ -1330,7 +1572,13 @@ async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, auth
 
         const resolvedErpNumber = shipmentInfo.erpNumber;
         const files = await getCarrierXmlFiles(cleanBase, authHeaders);
-        const resolved = await resolveP21PackingListFromCarrierXml(files, resolvedErpNumber);
+        const resolved = await resolveP21PackingListFromCarrierXml(
+            files,
+            resolvedErpNumber,
+            authHeaders,
+            cleanBase,
+            configuredBase
+        );
 
         if (!resolved.success) {
             const error = new Error(resolved.error || "No document was available for preview.");
@@ -1341,7 +1589,7 @@ async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, auth
 
         await saveToHistory({
             packID: `P21 Packing List ${shipmentLookupNumber}`,
-            website: cleanBase,
+            website: configuredBase || cleanBase,
             timestamp: Date.now(),
             images: [
                 `data:${resolved.contentType || "application/pdf"};base64,${resolved.documentData}`
@@ -1385,8 +1633,9 @@ async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, auth
 
 async function getShipmentInfoForP21(cleanBase, shipmentLookupNumber, authHeaders = {}) {
     const cleanShipmentLookupNumber = String(shipmentLookupNumber || "").trim();
-    const resp = await fetch(`${cleanBase}/api/shipments/${cleanShipmentLookupNumber}`, {
-        headers: authHeaders || {}
+    const url = `${cleanBase}/api/shipments/${encodeURIComponent(cleanShipmentLookupNumber)}`;
+    const resp = await fetchWithTimeout(url, {
+        headers: authHeadersForTarget(authHeaders, url, cleanBase)
     });
 
     if (!resp.ok) {
@@ -1410,9 +1659,11 @@ async function getShipmentInfoForP21(cleanBase, shipmentLookupNumber, authHeader
     };
 }
 
-async function getCarrierXmlFiles(cleanBase, authHeaders = {}) {
-    const listResponse = await fetch(`${cleanBase}/api/downloads/getCarrierXMLs`, {
-        headers: authHeaders || {}
+async function getCarrierXmlFiles(cleanBase, authHeaders = {}, signal = null) {
+    const url = `${cleanBase}/api/downloads/getCarrierXMLs`;
+    const listResponse = await fetchWithTimeout(url, {
+        headers: authHeadersForTarget(authHeaders, url, cleanBase),
+        signal: signal || undefined
     });
 
     if (!listResponse.ok) {
@@ -1431,7 +1682,13 @@ async function getCarrierXmlFiles(cleanBase, authHeaders = {}) {
     return files;
 }
 
-async function resolveP21PackingListFromCarrierXml(files, erpNumber) {
+async function resolveP21PackingListFromCarrierXml(
+    files,
+    erpNumber,
+    authHeaders = {},
+    authBaseUrl = "",
+    configuredBase = authBaseUrl
+) {
     const reqFiles = files
         .filter(file => getTransactionInfo(file && file.fileName)?.type === "REQ")
         .sort((a, b) => getFileTime(b) - getFileTime(a));
@@ -1439,7 +1696,11 @@ async function resolveP21PackingListFromCarrierXml(files, erpNumber) {
     for (const reqFile of reqFiles) {
         let reqText = "";
         try {
-            const reqResp = await fetch(reqFile.url);
+            const reqUrl = resolveQuickShipResourceUrl(reqFile.url, authBaseUrl, configuredBase);
+            if (!reqUrl) continue;
+            const reqResp = await fetchWithTimeout(reqUrl, {
+                headers: authHeadersForTarget(authHeaders, reqUrl, authBaseUrl)
+            });
             if (!reqResp.ok) continue;
             reqText = await reqResp.text();
         } catch (err) {
@@ -1462,7 +1723,20 @@ async function resolveP21PackingListFromCarrierXml(files, erpNumber) {
             };
         }
 
-        const resResp = await fetch(resFile.url);
+        const resUrl = resolveQuickShipResourceUrl(resFile.url, authBaseUrl, configuredBase);
+        if (!resUrl) {
+            return {
+                success: false,
+                category: "technical",
+                title: "Error",
+                error: "Found a matching response file, but its URL was invalid.",
+                reqFile,
+                resFile
+            };
+        }
+        const resResp = await fetchWithTimeout(resUrl, {
+            headers: authHeadersForTarget(authHeaders, resUrl, authBaseUrl)
+        });
         if (!resResp.ok) {
             return {
                 success: false,

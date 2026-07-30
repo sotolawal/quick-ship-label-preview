@@ -9,13 +9,11 @@
     "48": "icons/q128.png",
     "128": "icons/q128.png"
   },
-  "version": "1.0",
+  "version": "2.5",
   "permissions": [
     "storage",
-    "alarms",
     "contextMenus",
     "clipboardRead",
-    "webNavigation",
     "unlimitedStorage"
   ],
   "host_permissions": [
@@ -30,7 +28,8 @@
       ],
       "js": [
         "content.js"
-      ]
+      ],
+      "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [

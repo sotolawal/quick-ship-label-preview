@@ -64,8 +64,19 @@
 
     async function loadPreview(previewId) {
         const key = `preview:${previewId}`;
-        const result = await chrome.storage.session.get(key);
-        return result[key];
+        const sessionResult = await chrome.storage.session.get(key);
+        if (sessionResult[key]) {
+            await chrome.storage.session.remove(key);
+            return sessionResult[key];
+        }
+
+        const localResult = await chrome.storage.local.get(key);
+        if (localResult[key]) {
+            await chrome.storage.local.remove(key);
+            return localResult[key];
+        }
+
+        return null;
     }
 
     function renderMetadata(preview) {
@@ -316,9 +327,11 @@
 
     function captureMediaSize(el) {
         if (!el || el.dataset.baseWidth) return;
+        // offsetWidth/offsetHeight are layout dimensions and do not include CSS
+        // transforms. A rotated getBoundingClientRect() swaps the values.
         const rect = el.getBoundingClientRect();
-        const width = rect.width || el.offsetWidth;
-        const height = rect.height || el.offsetHeight;
+        const width = el.offsetWidth || rect.width;
+        const height = el.offsetHeight || rect.height;
         if (!width || !height) return;
         el.dataset.baseWidth = width;
         el.dataset.baseHeight = height;

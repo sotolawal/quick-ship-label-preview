@@ -147,6 +147,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // --- Quick Ship Connections ---
     const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
     const QUICK_SHIP_TEST_STATE_STORAGE_KEY = "quickShipConnectionTestStates";
+    const QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY = "quickShipSourceTrust";
     const connectionIcons = {
         server: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/><path d="M8 6.5h.01M8 17.5h.01M12 10v4"/></svg>',
         monitor: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
@@ -163,10 +164,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
         try {
             const parsed = new URL(withProtocol);
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
             const markerIndex = parsed.pathname.toLowerCase().indexOf("/epicorfreightservice.svc");
             const basePath = markerIndex >= 0 ? parsed.pathname.slice(0, markerIndex) : parsed.pathname;
             return `${parsed.origin}${basePath}`.replace(/\/$/, "");
-        } catch { return withProtocol.replace(/\/$/, ""); }
+        } catch { return ""; }
     }
 
     function quickShipPopupOverrideKey(value) {
@@ -207,6 +209,20 @@ document.addEventListener("DOMContentLoaded", async () => {
         };
         await chrome.storage.local.set({ [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: states });
         return states[key];
+    }
+
+    function removeTrustedConfiguredBase(trust, configuredKey) {
+        const updated = { ...(trust || {}) };
+        for (const [sourceOrigin, configuredBases] of Object.entries(updated)) {
+            if (!Array.isArray(configuredBases)) {
+                delete updated[sourceOrigin];
+                continue;
+            }
+            const remaining = configuredBases.filter(value => value !== configuredKey);
+            if (remaining.length > 0) updated[sourceOrigin] = remaining;
+            else delete updated[sourceOrigin];
+        }
+        return updated;
     }
 
     function formatConnectionTestState(testState) {
@@ -358,15 +374,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             editBtn.addEventListener("click", () => showConnectionForm(configured, effective));
             removeBtn.addEventListener("click", async () => {
-                const [latest, testStates] = await Promise.all([
+                const [latest, testStates, trustStored] = await Promise.all([
                     getConnectionMappings(),
-                    getConnectionTestStates()
+                    getConnectionTestStates(),
+                    chrome.storage.local.get(QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY)
                 ]);
                 delete latest[configuredKey];
                 delete testStates[configuredKey];
+                const trust = removeTrustedConfiguredBase(
+                    trustStored[QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY],
+                    configuredKey
+                );
                 await chrome.storage.local.set({
                     [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
-                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
+                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates,
+                    [QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY]: trust
                 });
                 await renderConnectionMappings();
             });
@@ -436,16 +458,22 @@ document.addEventListener("DOMContentLoaded", async () => {
                 ? quickShipPopupOverrideKey(editingConfiguredBase)
                 : null;
             if (editingKey && editingKey !== configuredKey) {
-                const [latest, testStates] = await Promise.all([
+                const [latest, testStates, trustStored] = await Promise.all([
                     getConnectionMappings(),
-                    getConnectionTestStates()
+                    getConnectionTestStates(),
+                    chrome.storage.local.get(QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY)
                 ]);
                 delete latest[editingKey];
                 delete testStates[editingKey];
                 latest[configuredKey] = candidateBase;
+                const trust = removeTrustedConfiguredBase(
+                    trustStored[QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY],
+                    editingKey
+                );
                 await chrome.storage.local.set({
                     [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
-                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
+                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates,
+                    [QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY]: trust
                 });
             }
             await saveConnectionTestState(configuredKey, "connected");
@@ -762,6 +790,14 @@ Hint: ${details.hint}` : "";
             metadata: {
                 source: "popup",
                 ...metadata
+            }
+        }, (result) => {
+            if (chrome.runtime.lastError || !result || !result.success) {
+                showErrorModal(
+                    (result && result.error)
+                        || chrome.runtime.lastError?.message
+                        || "The document viewer could not be opened."
+                );
             }
         });
     }
