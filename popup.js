@@ -418,12 +418,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     function closeConnectionsModal() {
         connectionsModal?.classList.remove("active");
+        document.body.classList.remove("connections-modal-open");
         showConnectionList();
     }
 
     quickShipConnectionsBtn?.addEventListener("click", async () => {
         closeMoreActionsMenu();
         showConnectionList();
+        document.body.classList.add("connections-modal-open");
         await renderConnectionMappings();
         connectionsModal?.classList.add("active");
     });
