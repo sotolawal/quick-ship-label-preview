@@ -575,7 +575,7 @@
                 .qs-p21-toast-visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
                 .qs-p21-toast-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
                 .qs-p21-toast-title { font-size: 18px; font-weight: 800; color: #c62828; }
-                .qs-p21-toast.qs-p21-toast-approval { background: #fffdf5; border-color: rgba(212,167,44,.35); border-left-color: #d4a72c; }
+                .qs-p21-toast.qs-p21-toast-approval { background: #fff8e1; border-color: #6b4f00; border-left-color: #f0d98a; }
                 .qs-p21-toast.qs-p21-toast-approval .qs-p21-toast-title { color: #9a6700; }
                 .qs-p21-toast-close { border: none; background: transparent; color: #64748b; cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 4px; }
                 .qs-p21-toast-message { font-size: 14px; line-height: 1.45; color: #334155; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; padding-bottom: 16px; }
