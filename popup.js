@@ -345,8 +345,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             summary.addEventListener("click", () => {
                 const willOpen = !card.classList.contains("open");
+
+                // Keep only one mapping expanded at a time so cards never compete
+                // for the extension popup's constrained vertical space.
+                connectionsList.querySelectorAll(".connection-card.open").forEach(otherCard => {
+                    if (otherCard === card) return;
+                    otherCard.classList.remove("open");
+                    otherCard.querySelector(".connection-summary")
+                        ?.setAttribute("aria-expanded", "false");
+                });
+
                 card.classList.toggle("open", willOpen);
                 summary.setAttribute("aria-expanded", String(willOpen));
+
+                if (willOpen) {
+                    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+                }
             });
 
             testBtn.addEventListener("click", () => {

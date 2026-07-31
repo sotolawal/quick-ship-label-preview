@@ -167,6 +167,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 const activeRequests = new Map();
 const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
+const QUICK_SHIP_TEST_STATE_STORAGE_KEY = "quickShipConnectionTestStates";
 const QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY = "quickShipSourceTrust";
 const ALLOWED_AUTH_HEADER_NAMES = new Map([
     ["authorization", "Authorization"],
@@ -326,8 +327,23 @@ async function saveQuickShipBaseOverride(configuredBase, candidateBase, authHead
     if (!tested.success) return tested;
     const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
     const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
-    mappings[quickShipOverrideKey(configured)] = tested.candidateBase;
-    await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings });
+    const configuredKey = quickShipOverrideKey(configured);
+    mappings[configuredKey] = tested.candidateBase;
+
+    // Keep the management pane in sync regardless of whether the successful
+    // Test & Save originated from the popup or the in-page recovery card.
+    const testStateStored = await chrome.storage.local.get(QUICK_SHIP_TEST_STATE_STORAGE_KEY);
+    const testStates = { ...(testStateStored[QUICK_SHIP_TEST_STATE_STORAGE_KEY] || {}) };
+    testStates[configuredKey] = {
+        state: "connected",
+        message: "",
+        testedAt: Date.now()
+    };
+
+    await chrome.storage.local.set({
+        [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings,
+        [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
+    });
     await rememberTrustedQuickShipSource(sender, configured);
     return { success: true, configuredBase: configured, effectiveBase: tested.candidateBase };
 }
