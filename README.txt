@@ -1,5 +1,5 @@
 Quick Ship Label Preview
-Release version 2.5
+Pre-release version 2.5
 
 What's New/Changed
 - Added throttling to comply with Labelary rate limits when previewing several labels/documents at once. 
