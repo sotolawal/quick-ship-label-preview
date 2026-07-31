@@ -575,6 +575,8 @@
                 .qs-p21-toast-visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
                 .qs-p21-toast-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
                 .qs-p21-toast-title { font-size: 18px; font-weight: 800; color: #c62828; }
+                .qs-p21-toast.qs-p21-toast-approval { background: #fffdf5; border-color: rgba(212,167,44,.35); border-left-color: #d4a72c; }
+                .qs-p21-toast.qs-p21-toast-approval .qs-p21-toast-title { color: #9a6700; }
                 .qs-p21-toast-close { border: none; background: transparent; color: #64748b; cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 4px; }
                 .qs-p21-toast-message { font-size: 14px; line-height: 1.45; color: #334155; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; padding-bottom: 16px; }
                 .qs-p21-toast-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
@@ -701,6 +703,7 @@
                 toast.className = "qs-p21-toast";
                 shadow.appendChild(toast);
             }
+            toast.classList.remove("qs-p21-toast-approval");
             toast.replaceChildren();
             const header = document.createElement("div");
             header.className = "qs-p21-toast-header";
@@ -752,6 +755,7 @@
             const approvalRequired = options.approvalRequired !== false;
             const sourceOrigin = options.sourceOrigin || window.location.origin;
             const attemptedBase = options.attemptedBase || configuredBase;
+            toast.classList.toggle("qs-p21-toast-approval", approvalRequired);
             toast.innerHTML = `
                 <div class="qs-p21-toast-header">
                     <div class="qs-p21-toast-title">${approvalRequired ? "Approve Quick Ship connection" : "Update Quick Ship connection"}</div>
@@ -775,7 +779,7 @@
                 <div id="qs-connection-error" class="qs-connection-error" role="alert"></div>
                 <div class="qs-p21-toast-actions">
                     <button id="qs-connection-cancel" class="qs-p21-toast-btn" type="button">Cancel</button>
-                    <button id="qs-connection-test" class="qs-p21-toast-btn primary" type="button">${approvalRequired ? "Test & Approve" : "Test & Save"}</button>
+                    <button id="qs-connection-test" class="qs-p21-toast-btn primary" type="button">${approvalRequired ? "Approve" : "Test & Save"}</button>
                 </div>`;
             toast.querySelector(".qs-connection-source").textContent = sourceOrigin || "Unknown site";
             toast.querySelector(".qs-connection-target").textContent = configuredBase || "Unknown address";
@@ -783,7 +787,7 @@
             input.value = attemptedBase || configuredBase || "";
             const error = toast.querySelector("#qs-connection-error");
             const testBtn = toast.querySelector("#qs-connection-test");
-            const idleButtonText = approvalRequired ? "Test & Approve" : "Test & Save";
+            const idleButtonText = approvalRequired ? "Approve" : "Test & Save";
             const close = () => this.hideP21Toast();
             toast.querySelector("#qs-connection-close").addEventListener("click", close);
             toast.querySelector("#qs-connection-cancel").addEventListener("click", close);
