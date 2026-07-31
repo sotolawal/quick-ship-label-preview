@@ -10,7 +10,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const p21FabToggleBtn = document.getElementById("p21-fab-toggle-btn");
     const p21FabStatus = document.getElementById("p21-fab-status");
     const p21FabResetBtn = document.getElementById("p21-fab-reset-btn");
-    // Quick Ship connection mapping controls.
+    // Quick Ship approval and optional address-override controls.
     const quickShipConnectionsBtn = document.getElementById("quick-ship-connections-btn");
     const connectionsModal = document.getElementById("connections-modal");
     const connectionsListView = document.getElementById("connections-list-view");
@@ -144,7 +144,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     updateP21FabMenuUI();
 
-    // --- Quick Ship Connections ---
+    // --- Quick Ship Access ---
     const QUICK_SHIP_OVERRIDE_STORAGE_KEY = "quickShipBaseOverrides";
     const QUICK_SHIP_TEST_STATE_STORAGE_KEY = "quickShipConnectionTestStates";
     const QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY = "quickShipSourceTrust";
@@ -199,6 +199,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         return { ...(stored[QUICK_SHIP_TEST_STATE_STORAGE_KEY] || {}) };
     }
 
+    async function getConnectionSourceTrust() {
+        const stored = await chrome.storage.local.get(QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY);
+        return { ...(stored[QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY] || {}) };
+    }
+
     async function saveConnectionTestState(configured, state, message = "") {
         const key = quickShipPopupOverrideKey(configured);
         const states = await getConnectionTestStates();
@@ -211,18 +216,33 @@ document.addEventListener("DOMContentLoaded", async () => {
         return states[key];
     }
 
-    function removeTrustedConfiguredBase(trust, configuredKey) {
+    function revokeTrustedConnection(trust, sourceOrigin, configuredKey) {
         const updated = { ...(trust || {}) };
-        for (const [sourceOrigin, configuredBases] of Object.entries(updated)) {
-            if (!Array.isArray(configuredBases)) {
-                delete updated[sourceOrigin];
-                continue;
-            }
-            const remaining = configuredBases.filter(value => value !== configuredKey);
-            if (remaining.length > 0) updated[sourceOrigin] = remaining;
-            else delete updated[sourceOrigin];
-        }
+        const configuredBases = Array.isArray(updated[sourceOrigin]) ? updated[sourceOrigin] : [];
+        const remaining = configuredBases.filter(value => quickShipPopupOverrideKey(value) !== configuredKey);
+        if (remaining.length > 0) updated[sourceOrigin] = remaining;
+        else delete updated[sourceOrigin];
         return updated;
+    }
+
+    function appendConnectionSection(titleText, descriptionText) {
+        const header = document.createElement("div");
+        header.className = "connection-section-header";
+        const title = document.createElement("div");
+        title.className = "connection-section-title";
+        title.textContent = titleText;
+        const description = document.createElement("div");
+        description.className = "connection-section-description";
+        description.textContent = descriptionText;
+        header.append(title, description);
+        connectionsList.appendChild(header);
+    }
+
+    function appendConnectionEmpty(message) {
+        const empty = document.createElement("div");
+        empty.className = "connection-empty";
+        empty.textContent = message;
+        connectionsList.appendChild(empty);
     }
 
     function formatConnectionTestState(testState) {
@@ -237,31 +257,129 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     async function renderConnectionMappings(openConfigured = null) {
         if (!connectionsList) return;
-        const [mappings, testStates] = await Promise.all([
+        const [mappings, testStates, trust] = await Promise.all([
             getConnectionMappings(),
-            getConnectionTestStates()
+            getConnectionTestStates(),
+            getConnectionSourceTrust()
         ]);
         connectionsList.replaceChildren();
-        const entries = Object.entries(mappings);
-        if (!entries.length) {
-            const empty = document.createElement("div");
-            empty.className = "connection-empty";
-            empty.textContent = "No Quick Ship mappings yet.";
-            connectionsList.appendChild(empty);
-            return;
+
+        appendConnectionSection(
+            "Approved Kinetic access",
+            "Each approval allows one Kinetic site to request labels from one Quick Ship site."
+        );
+        const approvalEntries = [];
+        for (const [sourceOrigin, configuredBases] of Object.entries(trust)) {
+            if (!Array.isArray(configuredBases)) continue;
+            for (const configuredValue of configuredBases) {
+                const configured = normalizePopupBase(configuredValue);
+                const configuredKey = quickShipPopupOverrideKey(configured);
+                if (configuredKey) approvalEntries.push({ sourceOrigin, configured, configuredKey });
+            }
+        }
+        approvalEntries.sort((a, b) =>
+            a.sourceOrigin.localeCompare(b.sourceOrigin)
+            || a.configured.localeCompare(b.configured)
+        );
+
+        if (!approvalEntries.length) {
+            appendConnectionEmpty("No cross-origin Kinetic connections are approved.");
         }
 
-        entries.sort(([a], [b]) => a.localeCompare(b));
-        for (const [configured, effective] of entries) {
+        for (const { sourceOrigin, configured, configuredKey } of approvalEntries) {
+            const mapped = normalizePopupBase(mappings[configuredKey]);
+            const hasOverride = Boolean(mapped && quickShipPopupOverrideKey(mapped) !== configuredKey);
+            const card = document.createElement("article");
+            card.className = "connection-card connection-approval-card";
+
+            const heading = document.createElement("div");
+            heading.className = "connection-approval-heading";
+            const headingCopy = document.createElement("div");
+            headingCopy.className = "connection-approval-copy";
+            const title = document.createElement("div");
+            title.className = "connection-title";
+            title.textContent = getConnectionName(configured);
+            const subtitle = document.createElement("div");
+            subtitle.className = "connection-subtitle";
+            subtitle.textContent = "May request Quick Ship labels";
+            headingCopy.append(title, subtitle);
+            const badge = document.createElement("span");
+            badge.className = "connection-approval-badge";
+            badge.textContent = "Approved";
+            heading.append(headingCopy, badge);
+
+            const route = document.createElement("div");
+            route.className = "connection-approval-route";
+            const appendApprovalRow = (labelText, addressText) => {
+                const row = document.createElement("div");
+                row.className = "connection-approval-row";
+                const label = document.createElement("span");
+                label.className = "connection-approval-label";
+                label.textContent = labelText;
+                const address = document.createElement("span");
+                address.className = "connection-approval-address";
+                address.textContent = addressText;
+                address.title = addressText;
+                row.append(label, address);
+                route.appendChild(row);
+            };
+            appendApprovalRow("Kinetic site", sourceOrigin);
+            appendApprovalRow("Quick Ship site", configured);
+            if (hasOverride) appendApprovalRow("Connection address (override)", mapped);
+
+            const footer = document.createElement("div");
+            footer.className = "connection-card-footer";
+            const routeType = document.createElement("span");
+            routeType.className = "connection-test-status";
+            routeType.textContent = hasOverride ? "Uses address override" : "Uses detected address directly";
+            const revokeBtn = document.createElement("button");
+            revokeBtn.type = "button";
+            revokeBtn.className = "connection-text-btn danger";
+            revokeBtn.textContent = "Revoke";
+            revokeBtn.title = `Revoke access from ${sourceOrigin}`;
+            footer.append(routeType, revokeBtn);
+            card.append(heading, route, footer);
+            connectionsList.appendChild(card);
+
+            revokeBtn.addEventListener("click", async () => {
+                revokeBtn.disabled = true;
+                const latestTrust = await getConnectionSourceTrust();
+                const updatedTrust = revokeTrustedConnection(latestTrust, sourceOrigin, configuredKey);
+                await chrome.storage.local.set({ [QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY]: updatedTrust });
+                await renderConnectionMappings();
+            });
+        }
+
+        appendConnectionSection(
+            "Address overrides",
+            "Optional rewrites used only when the detected Quick Ship address is not browser-accessible."
+        );
+        const overrideEntries = Object.entries(mappings)
+            .map(([configured, effective]) => [
+                normalizePopupBase(configured),
+                normalizePopupBase(effective)
+            ])
+            .filter(([configured, effective]) =>
+                configured
+                && effective
+                && quickShipPopupOverrideKey(configured) !== quickShipPopupOverrideKey(effective)
+            )
+            .sort(([a], [b]) => a.localeCompare(b));
+        if (!overrideEntries.length) {
+            appendConnectionEmpty("No address overrides. Approved connections use their detected address.");
+        }
+
+        for (const [configured, effective] of overrideEntries) {
             const configuredKey = quickShipPopupOverrideKey(configured);
             const card = document.createElement("article");
             card.className = "connection-card";
-            if (configured === openConfigured) card.classList.add("open");
+            const startsOpen = configuredKey === quickShipPopupOverrideKey(openConfigured);
+            if (startsOpen) card.classList.add("open");
 
             const summary = document.createElement("button");
             summary.type = "button";
             summary.className = "connection-summary";
-            summary.setAttribute("aria-expanded", String(configured === openConfigured));
+            summary.setAttribute("aria-expanded", String(startsOpen));
 
             const serverIcon = document.createElement("span");
             serverIcon.className = "connection-server-icon";
@@ -318,11 +436,11 @@ document.addEventListener("DOMContentLoaded", async () => {
                 route.append(node, copy);
             }
 
-            appendRoute(connectionIcons.monitor, "Quick Ship Website", configured);
+            appendRoute(connectionIcons.monitor, "Detected Quick Ship address", configured);
             const routeLine = document.createElement("span");
             routeLine.className = "connection-route-line";
             route.append(routeLine, document.createElement("span"));
-            appendRoute(connectionIcons.link, "Browser-accessible IP Address", effective);
+            appendRoute(connectionIcons.link, "Alternate browser-accessible address", effective);
 
             const footer = document.createElement("div");
             footer.className = "connection-card-footer";
@@ -332,9 +450,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             if (savedTestState?.message) testStatus.title = savedTestState.message;
             const actions = document.createElement("span");
             actions.className = "connection-icon-actions";
-            const testBtn = makeIconButton(connectionIcons.test, "Test connection");
-            const editBtn = makeIconButton(connectionIcons.edit, "Edit mapping");
-            const removeBtn = makeIconButton(connectionIcons.remove, "Remove mapping", "danger");
+            const testBtn = makeIconButton(connectionIcons.test, "Test address override");
+            const editBtn = makeIconButton(connectionIcons.edit, "Edit address override");
+            const removeBtn = makeIconButton(connectionIcons.remove, "Remove address override", "danger");
             actions.append(testBtn, editBtn, removeBtn);
             footer.append(testStatus, actions);
             content.append(route, footer);
@@ -388,21 +506,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
             editBtn.addEventListener("click", () => showConnectionForm(configured, effective));
             removeBtn.addEventListener("click", async () => {
-                const [latest, testStates, trustStored] = await Promise.all([
+                const [latest, latestTestStates] = await Promise.all([
                     getConnectionMappings(),
-                    getConnectionTestStates(),
-                    chrome.storage.local.get(QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY)
+                    getConnectionTestStates()
                 ]);
                 delete latest[configuredKey];
-                delete testStates[configuredKey];
-                const trust = removeTrustedConfiguredBase(
-                    trustStored[QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY],
-                    configuredKey
-                );
+                delete latestTestStates[configuredKey];
                 await chrome.storage.local.set({
                     [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
-                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates,
-                    [QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY]: trust
+                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: latestTestStates
                 });
                 await renderConnectionMappings();
             });
@@ -420,14 +532,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     function showConnectionForm(configured = "", effective = "") {
         editingConfiguredBase = configured || null;
         configuredBaseInput.value = configured;
+        configuredBaseInput.disabled = Boolean(configured);
         accessibleBaseInput.value = effective;
-        connectionFormTitle.textContent = configured ? "Edit mapping" : "Add mapping";
-        connectionsSaveBtn.textContent = configured ? "Test & Save changes" : "Test & Save";
+        connectionFormTitle.textContent = configured ? "Edit address override" : "Add address override";
+        connectionsSaveBtn.textContent = configured ? "Test & Save changes" : "Test & Save override";
         connectionsStatus.textContent = "";
         connectionsStatus.className = "connection-status";
         connectionsListView?.classList.add("hidden");
         connectionForm?.classList.add("active");
-        configuredBaseInput.focus();
+        (configured ? accessibleBaseInput : configuredBaseInput).focus();
     }
 
     function closeConnectionsModal() {
@@ -458,12 +571,17 @@ document.addEventListener("DOMContentLoaded", async () => {
             connectionsStatus.textContent = "Enter both addresses.";
             return;
         }
+        if (quickShipPopupOverrideKey(configuredBase) === quickShipPopupOverrideKey(candidateBase)) {
+            connectionsStatus.classList.add("error");
+            connectionsStatus.textContent = "These addresses are the same, so an override is not needed.";
+            return;
+        }
         connectionsSaveBtn.disabled = true;
         connectionsSaveBtn.textContent = "Testing…";
-        connectionsStatus.textContent = "Testing the browser-accessible address…";
+        connectionsStatus.textContent = "Testing the alternate address…";
         chrome.runtime.sendMessage({ type: "saveQuickShipBaseOverride", configuredBase, candidateBase }, async result => {
             connectionsSaveBtn.disabled = false;
-            connectionsSaveBtn.textContent = editingConfiguredBase ? "Test & Save changes" : "Test & Save";
+            connectionsSaveBtn.textContent = editingConfiguredBase ? "Test & Save changes" : "Test & Save override";
             if (chrome.runtime.lastError || !result || !result.success) {
                 connectionsStatus.classList.add("error");
                 connectionsStatus.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
@@ -474,27 +592,21 @@ document.addEventListener("DOMContentLoaded", async () => {
                 ? quickShipPopupOverrideKey(editingConfiguredBase)
                 : null;
             if (editingKey && editingKey !== configuredKey) {
-                const [latest, testStates, trustStored] = await Promise.all([
+                const [latest, testStates] = await Promise.all([
                     getConnectionMappings(),
-                    getConnectionTestStates(),
-                    chrome.storage.local.get(QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY)
+                    getConnectionTestStates()
                 ]);
                 delete latest[editingKey];
                 delete testStates[editingKey];
                 latest[configuredKey] = candidateBase;
-                const trust = removeTrustedConfiguredBase(
-                    trustStored[QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY],
-                    editingKey
-                );
                 await chrome.storage.local.set({
                     [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: latest,
-                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates,
-                    [QUICK_SHIP_SOURCE_TRUST_STORAGE_KEY]: trust
+                    [QUICK_SHIP_TEST_STATE_STORAGE_KEY]: testStates
                 });
             }
-            await saveConnectionTestState(configuredKey, "connected");
+            await saveConnectionTestState(configuredBase, "connected");
             connectionsStatus.classList.add("success");
-            connectionsStatus.textContent = "Connected and saved.";
+            connectionsStatus.textContent = "Address override tested and saved.";
             await renderConnectionMappings(configuredKey);
             setTimeout(showConnectionList, 450);
         });

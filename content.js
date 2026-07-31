@@ -749,34 +749,49 @@
                 shadow.appendChild(toast);
             }
             if (this.p21ToastTimer) clearTimeout(this.p21ToastTimer);
+            const approvalRequired = options.approvalRequired !== false;
+            const sourceOrigin = options.sourceOrigin || window.location.origin;
+            const attemptedBase = options.attemptedBase || configuredBase;
             toast.innerHTML = `
                 <div class="qs-p21-toast-header">
-                    <div class="qs-p21-toast-title">Quick Ship could not be reached</div>
+                    <div class="qs-p21-toast-title">${approvalRequired ? "Approve Quick Ship connection" : "Update Quick Ship connection"}</div>
                     <button class="qs-p21-toast-close" id="qs-connection-close" type="button" aria-label="Dismiss">&times;</button>
                 </div>
                 <div class="qs-connection-copy">
-                    Kinetic is configured to use:
-                    <span class="qs-connection-url"></span>
+                    ${approvalRequired ? "Allow this Kinetic site:" : "Kinetic site:"}
+                    <span class="qs-connection-url qs-connection-source"></span>
                 </div>
-                <div class="qs-connection-copy">Enter a Quick Ship address this browser can access.</div>
+                <div class="qs-connection-copy">
+                    ${approvalRequired ? "To request labels from this Quick Ship site:" : "Quick Ship site:"}
+                    <span class="qs-connection-url qs-connection-target"></span>
+                </div>
+                <div class="qs-connection-copy">
+                    Connection address
+                    <span style="display:block;margin-top:3px;color:#64748b;font-size:12px;">
+                        Only change this if the detected Quick Ship address is not reachable from this browser.
+                    </span>
+                </div>
                 <input id="qs-connection-input" class="qs-connection-input" type="url" placeholder="http://server:port" autocomplete="url">
                 <div id="qs-connection-error" class="qs-connection-error" role="alert"></div>
                 <div class="qs-p21-toast-actions">
                     <button id="qs-connection-cancel" class="qs-p21-toast-btn" type="button">Cancel</button>
-                    <button id="qs-connection-test" class="qs-p21-toast-btn primary" type="button">Test & Save</button>
+                    <button id="qs-connection-test" class="qs-p21-toast-btn primary" type="button">${approvalRequired ? "Test & Approve" : "Test & Save"}</button>
                 </div>`;
-            toast.querySelector(".qs-connection-url").textContent = configuredBase || "Unknown address";
+            toast.querySelector(".qs-connection-source").textContent = sourceOrigin || "Unknown site";
+            toast.querySelector(".qs-connection-target").textContent = configuredBase || "Unknown address";
             const input = toast.querySelector("#qs-connection-input");
+            input.value = attemptedBase || configuredBase || "";
             const error = toast.querySelector("#qs-connection-error");
             const testBtn = toast.querySelector("#qs-connection-test");
+            const idleButtonText = approvalRequired ? "Test & Approve" : "Test & Save";
             const close = () => this.hideP21Toast();
             toast.querySelector("#qs-connection-close").addEventListener("click", close);
             toast.querySelector("#qs-connection-cancel").addEventListener("click", close);
             const submit = (event) => {
-                // Only a real user gesture may approve a new cross-origin mapping.
+                // Only a real user gesture may approve a new cross-origin connection.
                 if (event && !event.isTrusted) return;
-                const candidateBase = String(input.value || "").trim();
-                if (!candidateBase) { error.textContent = "Enter the browser-accessible Quick Ship URL."; input.focus(); return; }
+                const candidateBase = String(input.value || configuredBase || "").trim();
+                if (!candidateBase) { error.textContent = "Enter the Quick Ship connection address."; input.focus(); return; }
                 error.textContent = "";
                 input.disabled = true;
                 testBtn.disabled = true;
@@ -789,13 +804,19 @@
                 }, (result) => {
                     input.disabled = false;
                     testBtn.disabled = false;
-                    testBtn.textContent = "Test & Save";
+                    testBtn.textContent = idleButtonText;
                     if (chrome.runtime.lastError || !result || !result.success) {
                         error.textContent = (result && result.error) || chrome.runtime.lastError?.message || "Connection test failed.";
                         return;
                     }
                     this.hideP21Toast();
-                    this.showLoading("Connected — retrying label preview...", `Using ${result.effectiveBase}`);
+                    const detail = result.overridden
+                        ? `Using address override ${result.effectiveBase}`
+                        : `Using ${result.effectiveBase}`;
+                    this.showLoading(
+                        approvalRequired ? "Approved — retrying label preview..." : "Connected — retrying label preview...",
+                        detail
+                    );
                     if (typeof options.onSaved === "function") options.onSaved(result);
                 });
             };
@@ -1504,6 +1525,9 @@
                 ui.removeLabelPreviewCard();
                 ui.showQuickShipConnectionSetup(configuredBase, {
                     authHeaders: context.quickShipAuthHeaders || {},
+                    approvalRequired: msg.approvalRequired,
+                    attemptedBase: msg.attemptedBase || configuredBase,
+                    sourceOrigin: window.location.origin,
                     onSaved: () => {
                         latestKineticAutoPreviewKey = null;
                         requestKineticLabelPreview();

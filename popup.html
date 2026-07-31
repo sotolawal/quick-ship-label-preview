@@ -378,7 +378,7 @@
         .connection-list {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 9px;
             min-height: 76px;
             max-height: none;
             overflow-y: auto;
@@ -390,13 +390,28 @@
             flex: 0 0 auto;
         }
         .connection-empty {
-            padding: 26px 16px;
+            padding: 14px 12px;
             border: 1px dashed #cbd5e1;
             border-radius: 7px;
             color: #64748b;
             text-align: center;
             font-size: 12px;
         }
+        .connection-section-header { margin-top: 7px; }
+        .connection-section-header:first-child { margin-top: 0; }
+        .connection-section-title { color: #334155; font-size: 12px; font-weight: 700; }
+        .connection-section-description { margin-top: 2px; color: #64748b; font-size: 10.5px; line-height: 1.4; }
+        .connection-approval-card { padding: 11px 12px; }
+        .connection-approval-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+        .connection-approval-copy { min-width: 0; }
+        .connection-approval-badge { flex: 0 0 auto; padding: 3px 6px; border-radius: 999px; background: #e8f5e9; color: #168316; font-size: 9.5px; font-weight: 700; }
+        .connection-approval-route { display: grid; gap: 8px; margin-top: 10px; }
+        .connection-approval-row { min-width: 0; }
+        .connection-approval-label { display: block; margin-bottom: 2px; color: #7b8794; font-size: 10px; }
+        .connection-approval-address { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #334155; font: 10.5px/1.35 Consolas, monospace; }
+        .connection-text-btn { border: 0; padding: 4px 2px; background: transparent; color: #0d6da0; cursor: pointer; font: 600 10.5px/1.3 inherit; }
+        .connection-text-btn.danger { color: #b21f16; }
+        .connection-text-btn:hover { text-decoration: underline; }
         .connection-card {
             flex: 0 0 auto;
             overflow: hidden;
@@ -454,6 +469,7 @@
         .connection-label { display: block; margin-bottom: 5px; color: #475569; font-size: 12px; font-weight: 600; }
         .connection-input { width: 100%; box-sizing: border-box; padding: 8px 9px; border: 1px solid #cbd5e1; border-radius: 5px; font: inherit; outline: none; }
         .connection-input:focus { border-color: #0d6da0; box-shadow: 0 0 0 2px rgba(13,109,160,.12); }
+        .connection-input:disabled { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
         .connection-status { min-height: 18px; margin-top: 7px; color: #475569; font-size: 11px; }
         .connection-status.success { color: #168316; }
         .connection-status.error { color: #b21f16; }
@@ -477,7 +493,7 @@
                     <button id="p21-fab-reset-btn" class="menu-item" type="button" role="menuitem">Reset P21 Button Position</button>
                     <div class="menu-divider"></div>
                     <button id="quick-ship-connections-btn" class="menu-item" type="button" role="menuitem">
-                        <span>Quick Ship Connections</span><span class="menu-status">Manage</span>
+                        <span>Quick Ship Access</span><span class="menu-status">Manage</span>
                     </button>
                     <div class="menu-divider"></div>
                     <button id="delete-all-btn" class="menu-item danger" type="button" role="menuitem">Clear Recent Shipments</button>
@@ -518,14 +534,14 @@
         <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="connections-title">
             <div id="connections-list-view" class="connection-list-view">
                 <div class="connections-header">
-                    <div id="connections-title" class="modal-header">Quick Ship Connections</div>
-                    <p class="connections-description">Map your Quick Ship sites to IP addresses this browser can reach.</p>
+                    <div id="connections-title" class="modal-header">Quick Ship Access</div>
+                    <p class="connections-description">Review approved Kinetic access. Add an address override only when the detected Quick Ship address is not reachable.</p>
                 </div>
                 <div id="connections-list" class="connection-list"></div>
                 <div class="connections-footer">
                     <button id="connections-add-btn" class="modal-btn connections-add-btn" style="background:#0d6da0;color:#fff;">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-                        Add mapping
+                        Add address override
                     </button>
                     <button id="connections-close-btn" class="modal-btn cancel">Close</button>
                 </div>
@@ -534,23 +550,23 @@
                 <div class="connections-header" style="padding-left:0;padding-right:0;">
                     <button id="connection-back-btn" class="connection-back-btn" type="button">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m15 18-6-6 6-6"/></svg>
-                        Connections
+                        Quick Ship Access
                     </button>
-                    <div id="connection-form-title" class="modal-header">Add mapping</div>
-                    <p class="connections-description">Map the Quick Ship website address to an IP address this browser can reach.</p>
+                    <div id="connection-form-title" class="modal-header">Add address override</div>
+                    <p class="connections-description">Use an alternate address only when this browser cannot reach the address detected in Kinetic.</p>
                 </div>
                 <div class="connection-field">
-                    <label class="connection-label" for="configured-base-input">Quick Ship Website</label>
+                    <label class="connection-label" for="configured-base-input">Detected Quick Ship address</label>
                     <input id="configured-base-input" class="connection-input" placeholder="http://qs-server">
                 </div>
                 <div class="connection-field">
-                    <label class="connection-label" for="accessible-base-input">Browser-accessible IP Address</label>
+                    <label class="connection-label" for="accessible-base-input">Alternate browser-accessible address</label>
                     <input id="accessible-base-input" class="connection-input" placeholder="http://10.0.0.10:222">
                 </div>
                 <div id="connections-status" class="connection-status" aria-live="polite"></div>
                 <div class="modal-footer" style="margin-top:12px;">
                     <button id="connection-cancel-btn" class="modal-btn cancel">Cancel</button>
-                    <button id="connections-save-btn" class="modal-btn" style="background:#0d6da0;color:#fff;">Test &amp; Save</button>
+                    <button id="connections-save-btn" class="modal-btn" style="background:#0d6da0;color:#fff;">Test &amp; Save override</button>
                 </div>
             </div>
         </div>
