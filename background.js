@@ -118,11 +118,13 @@ async function handleRuntimeMessage(msg, sender) {
             throw new Error("Blocked a Kinetic preview request with an invalid source page.");
         }
         if (!(await isQuickShipBaseAllowedForSender(msg.baseUrl, sender))) {
+            const baseResolution = await getEffectiveQuickShipBase(msg.baseUrl);
             sendQuickShipConnectionRequired(
                 tabId,
-                msg.baseUrl,
-                msg.baseUrl,
-                new Error("Approve this Quick Ship connection before using it from Kinetic.")
+                baseResolution.configuredBase || msg.baseUrl,
+                baseResolution.effectiveBase || msg.baseUrl,
+                new Error("Approve this Quick Ship connection before using it from Kinetic."),
+                true
             );
             return { success: false, requiresConnectionApproval: true };
         }
@@ -288,12 +290,20 @@ async function getEffectiveQuickShipBase(configuredBase) {
     const normalizedConfigured = normalizeQuickShipBase(configuredBase);
     if (!normalizedConfigured) return { configuredBase: "", effectiveBase: "", overridden: false };
     const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
-    const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
-    const mapped = normalizeQuickShipBase(mappings[quickShipOverrideKey(normalizedConfigured)]);
+    const mappings = { ...(stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {}) };
+    const configuredKey = quickShipOverrideKey(normalizedConfigured);
+    const mapped = normalizeQuickShipBase(mappings[configuredKey]);
+    const overridden = Boolean(mapped && quickShipOverrideKey(mapped) !== configuredKey);
+    if (mapped && !overridden) {
+        // Remove self-mappings created by older versions; direct connections
+        // now rely on approval alone.
+        delete mappings[configuredKey];
+        await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings });
+    }
     return {
         configuredBase: normalizedConfigured,
-        effectiveBase: mapped || normalizedConfigured,
-        overridden: Boolean(mapped)
+        effectiveBase: overridden ? mapped : normalizedConfigured,
+        overridden
     };
 }
 async function testQuickShipConnection(candidateBase, authHeaders = {}) {
@@ -325,11 +335,25 @@ async function saveQuickShipBaseOverride(configuredBase, candidateBase, authHead
     const tested = await testQuickShipConnection(candidateBase, authHeaders);
     if (!tested.success) return tested;
     const stored = await chrome.storage.local.get(QUICK_SHIP_OVERRIDE_STORAGE_KEY);
-    const mappings = stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {};
-    mappings[quickShipOverrideKey(configured)] = tested.candidateBase;
+    const mappings = { ...(stored[QUICK_SHIP_OVERRIDE_STORAGE_KEY] || {}) };
+    const configuredKey = quickShipOverrideKey(configured);
+    const isOverride = quickShipOverrideKey(tested.candidateBase) !== configuredKey;
+    if (isOverride) {
+        mappings[configuredKey] = tested.candidateBase;
+    } else {
+        // Approval and address rewriting are separate concepts. A reachable
+        // configured address does not need a self-mapping.
+        delete mappings[configuredKey];
+    }
     await chrome.storage.local.set({ [QUICK_SHIP_OVERRIDE_STORAGE_KEY]: mappings });
     await rememberTrustedQuickShipSource(sender, configured);
-    return { success: true, configuredBase: configured, effectiveBase: tested.candidateBase };
+    return {
+        success: true,
+        configuredBase: configured,
+        effectiveBase: tested.candidateBase,
+        approved: Boolean(getUrlOrigin(sender && sender.tab && sender.tab.url)),
+        overridden: isOverride
+    };
 }
 
 async function fetchWithTimeout(input, init = {}, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS) {
@@ -379,12 +403,13 @@ function isQuickShipNetworkFailure(err) {
     const text = String(err.message || err).toLowerCase();
     return err instanceof TypeError || /failed to fetch|networkerror|network request failed|load failed/.test(text);
 }
-function sendQuickShipConnectionRequired(tabId, configuredBase, attemptedBase, err) {
+function sendQuickShipConnectionRequired(tabId, configuredBase, attemptedBase, err, approvalRequired = false) {
     if (!tabId) return;
     chrome.tabs.sendMessage(tabId, {
         type: "quickShipConnectionRequired",
         configuredBase: normalizeQuickShipBase(configuredBase),
         attemptedBase: normalizeQuickShipBase(attemptedBase),
+        approvalRequired,
         error: err && err.message ? err.message : "Failed to fetch"
     }).catch(() => {});
 }

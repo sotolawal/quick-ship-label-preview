@@ -2,7 +2,6 @@ Quick Ship Label Preview
 Release version 2.5
 
 What's New/Changed
-- Added Quick Ship website name mappings to IP addresses to allow label previews outside of VMs. 
 - Added throttling to comply with Labelary rate limits when previewing several labels/documents at once. 
 - Labels can now be printed with the appropriate dimensions when printing from the viewer. 
 
@@ -23,7 +22,6 @@ Using the extension:
 1. Click the extension icon in your browser.
 2. Pin the extension for easier access.
 3. Ship, freight, or copy label data for preview. 
-4. The first time a Kinetic site uses a Quick Ship server on a different origin, approve it through Test & Save. Removing that connection revokes the approval.
 
 Key Features
 1. Quick Ship label preview
