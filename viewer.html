@@ -297,7 +297,7 @@
 
         .page-total {
             color: #5f7180;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 650;
         }
 
@@ -317,21 +317,19 @@
             height: 40px;
             place-items: center;
             padding: 0;
-            background: rgba(255, 255, 255, 0.92);
+            border: 0;
+            background: transparent;
             color: var(--qs-blue);
             cursor: pointer;
-            backdrop-filter: blur(8px);
-            transition: color 0.18s ease, background 0.18s ease, transform 0.15s ease;
         }
 
         .rotate-btn:hover {
             background: #fff;
             color: var(--qs-blue-hover);
-            transform: rotate(12deg);
         }
 
         .rotate-btn:active {
-            transform: rotate(12deg) scale(0.95);
+            transform: rotate(0deg) scale(0.95);
         }
 
         .fan-icon {
