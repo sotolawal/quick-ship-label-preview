@@ -4,52 +4,49 @@ Pre-release version 2.5
 What's New/Changed
 - Added throttling to comply with Labelary rate limits when previewing several labels/documents at once. 
 - Labels can now be printed with the appropriate dimensions when printing from the viewer. 
-- The viewer now groups labels and PDF documents in a compact indexed layout.
-- Added direct download for a single item and ZIP download for multi-item previews, using Pack ID-based filenames.
+- Viewer stylization and grouping has changed.
+- Labels and documents can now be downloaded from the viewer page. 
 
 What This Does
-This extension helps preview shipping related documents and labels from Quick Ship. It can preview as shipments are processed, preview copied label or document data and store recent previews.
+This extension helps preview shipping related documents and labels from Quick Ship. It can preview as shipments are processed, as well as preview copied label or document data.
 
 Important Requirement
         Quick Ship must have the GenerateXML app setting enabled.
 
 Steps to Setup
-Loading the extension:
-1. Open chrome://extensions (or edge://extensions).
-2. Enable Developer mode.
-3. Click Load unpacked.
-4. Select the extension folder named "Quick Ship Label Preview".
+        Loading the extension:
+                1. Open chrome://extensions (or edge://extensions).
+                2. Enable Developer mode.
+                3. Click Load unpacked.
+                4. Select the extension folder named "Quick Ship Label Preview".
 
-Using the extension:
-1. Click the extension icon in your browser.
-2. Pin the extension for easier access.
-3. Ship, freight, or copy label data for preview. 
+        Using the extension:
+                1. Click the extension icon in your browser.
+                2. Pin the extension for easier access.
+                3. Open up Quick Ship or Kinetic/Epicor.
+                4. Ship, freight, or copy label data for preview. 
 
 Key Features
-1. Quick Ship label preview
-        Automatically previews labels as shipments are processed in Quick Ship.
+        1. Quick Ship label/documents preview
+                Automatically previews carrier labels and documents as shipments are processed in Quick Ship.
    
-2. Kinetic label preview
-        Automatically previews labels while freighting in Kinetic.
+        2. Kinetic label preview
+                Automatically previews carrier labels while freighting in Kinetic.
    
-3. Prophet 21 Packing List preview
-        Automatically previews labels in Quick Ship environments integrated with Prophet 21. 
-                Notes:
-                        1. Uses a floating button that can be moved and/or dismissed.  
+        3. Prophet 21 Packing List preview
+                Automatically previews packing lists sent from Prophet 21 in Quick Ship environments integrated with Prophet 21. 
+                        Notes:
+                                1. There's a floating button that you can freely move or close to preview packing lists per shipment.
 
-4. Clipboard Previews
-        Opens selected/copied label data directly in the dedicated viewer tab.
-                Preview copied label data:
-                        1. Highlight text that contains supported label data.
-                        2. Right-click the highlighted text.
-                        3. Select Preview.
+        4. Clipboard Previews
+                Opens selected/copied label data for preview in a new tab.
+                       To preview copied label data:
+                                1. Highlight text that contains label data.
+                                2. Right-click the highlighted text.
+                                3. Select Preview.
 
 Supported Browsers
         Chrome, Microsoft Edge and other chromium browsers such as Brave, Opera, and Vivaldi.
-
-Development Checks
-1. Run `npm test` to execute the dependency-free regression tests.
-2. Run `npm run check` to validate the JavaScript syntax used by the extension.
 
 Supported Carriers
 - UPS
