@@ -16,6 +16,15 @@
         wirePageButtons();
 
         try {
+            const directError = getDirectErrorFromUrl();
+            if (directError) {
+                document.title = directError.title;
+                const title = document.querySelector(".viewer-title");
+                if (title) title.textContent = directError.title;
+                showError(directError.message);
+                return;
+            }
+
             const previewId = getPreviewIdFromUrl();
 
             if (!previewId) {
@@ -61,6 +70,16 @@
     function getPreviewIdFromUrl() {
         const params = new URLSearchParams(window.location.search);
         return params.get("id");
+    }
+
+    function getDirectErrorFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+        const message = params.get("error");
+        if (!message) return null;
+        return {
+            title: params.get("title") || "Preview Error",
+            message
+        };
     }
 
     async function loadPreview(previewId) {
@@ -117,9 +136,38 @@
 
         if (!viewer) throw new Error("Viewer container was not found.");
 
-        const normalizedItems = await Promise.all(
+        const normalizationResults = await Promise.allSettled(
             images.map((item, originalIndex) => normalizePreviewItem(item, originalIndex))
         );
+        const normalizedItems = [];
+        const normalizationFailures = [];
+
+        normalizationResults.forEach((result, originalIndex) => {
+            if (result.status === "fulfilled") {
+                normalizedItems.push(result.value);
+            } else {
+                normalizationFailures.push({ originalIndex, reason: result.reason });
+            }
+        });
+
+        if (normalizationFailures.length > 0) {
+            console.warn("[Quick Ship] Some preview items were skipped:", normalizationFailures);
+        }
+
+        if (normalizedItems.length === 0) {
+            const pill = document.getElementById("metadata-pill");
+            if (pill) {
+                pill.textContent = `0 / ${images.length}`;
+                pill.setAttribute("aria-label", `0 of ${images.length} items available`);
+            }
+            document.title = "Document Preview (0 items)";
+            const firstReason = normalizationFailures[0]?.reason;
+            const reasonMessage = firstReason && firstReason.message
+                ? ` ${firstReason.message}`
+                : "";
+            throw new Error(`None of the preview items could be read.${reasonMessage}`);
+        }
+
         const labels = normalizedItems.filter((item) => !isPdfItem(item));
         const documents = normalizedItems.filter(isPdfItem);
         const orderedItems = [...labels, ...documents];
@@ -127,11 +175,28 @@
         state.items = orderedItems;
         viewer.replaceChildren();
 
+        if (normalizationFailures.length > 0) {
+            const pill = document.getElementById("metadata-pill");
+            if (pill) {
+                pill.textContent = `${orderedItems.length} / ${images.length}`;
+                pill.setAttribute("aria-label", `${orderedItems.length} of ${images.length} items available`);
+            }
+            document.title = orderedItems.length > 1
+                ? `Document Preview (${orderedItems.length} items)`
+                : "Document Preview";
+        }
+
         if (labels.length > 0) {
-            viewer.appendChild(createViewerGroup("labels", "Labels", labels, orderedItems));
+            viewer.appendChild(createViewerGroup("labels", "Labels", labels, 0, orderedItems.length));
         }
         if (documents.length > 0) {
-            viewer.appendChild(createViewerGroup("documents", "Documents", documents, orderedItems));
+            viewer.appendChild(createViewerGroup(
+                "documents",
+                "Documents",
+                documents,
+                labels.length,
+                orderedItems.length
+            ));
         }
 
         if (printBtn) {
@@ -147,7 +212,19 @@
             }
         }
 
-        status?.remove();
+        const warnings = [];
+        if (state.metadata.warning) warnings.push(String(state.metadata.warning));
+        if (normalizationFailures.length > 0) {
+            const skippedCount = normalizationFailures.length;
+            warnings.push(`${skippedCount} malformed item${skippedCount === 1 ? " was" : "s were"} skipped.`);
+        }
+
+        if (status && warnings.length > 0) {
+            status.className = "warning-card";
+            status.textContent = warnings.join(" ");
+        } else {
+            status?.remove();
+        }
 
         requestAnimationFrame(() => {
             document.querySelectorAll('img[id^="media-"]').forEach((el) => {
@@ -160,7 +237,7 @@
         });
     }
 
-    function createViewerGroup(key, title, items, orderedItems) {
+    function createViewerGroup(key, title, items, renderedOffset, totalItems) {
         const section = document.createElement("section");
         section.className = `viewer-group ${key}-group`;
 
@@ -185,10 +262,9 @@
         list.className = "viewer-group-items";
         list.setAttribute("role", "list");
 
-        for (const item of items) {
-            const renderedIndex = orderedItems.indexOf(item);
-            list.appendChild(createLabelCard(item, renderedIndex, orderedItems.length));
-        }
+        items.forEach((item, groupIndex) => {
+            list.appendChild(createLabelCard(item, renderedOffset + groupIndex, totalItems));
+        });
 
         section.append(summary, list);
         return section;
@@ -213,17 +289,23 @@
             if (source.startsWith("data:")) {
                 return createBlobBackedItem(source, type, shared);
             }
+            assertSupportedPreviewType(type, shared.originalIndex);
             return {
                 ...shared,
                 src: source,
-                type: type || declaredType || "image/png",
+                type,
                 blob: null,
-                isLabel: shared.isLabel ?? (type || declaredType || "image/png").startsWith("image/")
+                isLabel: shared.isLabel ?? type.startsWith("image/")
             };
         }
 
         if (item.base64) {
-            const type = declaredType || "image/png";
+            const detectedType = inferTypeFromBase64(item.base64);
+            if (!detectedType) {
+                throw new Error(`Preview item ${originalIndex + 1} did not contain recognizable media data.`);
+            }
+            const type = detectedType || declaredType;
+            assertSupportedPreviewType(type, shared.originalIndex);
             const blob = createBlobFromBase64(item.base64, type);
             return createObjectUrlItem(blob, type, shared);
         }
@@ -235,11 +317,16 @@
         const trimmed = String(value || "").trim();
         const shared = { originalIndex };
 
+        if (!trimmed) {
+            throw new Error(`Preview item ${originalIndex + 1} was empty.`);
+        }
+
         if (trimmed.startsWith("data:")) {
             return createBlobBackedItem(trimmed, inferTypeFromSrc(trimmed), shared);
         }
 
         const type = inferTypeFromBase64(trimmed);
+        assertSupportedPreviewType(type, originalIndex);
         const blob = createBlobFromBase64(trimmed, type);
         return createObjectUrlItem(blob, type, shared);
     }
@@ -287,14 +374,26 @@
     }
 
     function createBlobBackedItem(dataUrl, fallbackType, shared) {
-        const blob = dataUrlToBlob(dataUrl, fallbackType);
-        return createObjectUrlItem(blob, normalizeMimeType(blob.type || fallbackType), shared);
+        const detectedType = inferTypeFromBase64(dataUrl);
+        if (/;base64,/i.test(dataUrl) && !detectedType) {
+            throw new Error(`Preview item ${shared.originalIndex + 1} did not contain recognizable media data.`);
+        }
+        const decodedBlob = dataUrlToBlob(dataUrl, detectedType || fallbackType);
+        const resolvedType = normalizeMimeType(detectedType || decodedBlob.type || fallbackType);
+        const blob = normalizeMimeType(decodedBlob.type) === resolvedType
+            ? decodedBlob
+            : new Blob([decodedBlob], { type: resolvedType });
+        return createObjectUrlItem(blob, resolvedType, shared);
     }
 
     function createObjectUrlItem(blob, type, shared) {
+        if (!blob || blob.size === 0) {
+            throw new Error(`Preview item ${shared.originalIndex + 1} contained no data.`);
+        }
+        const normalizedType = normalizeMimeType(type || blob.type);
+        assertSupportedPreviewType(normalizedType, shared.originalIndex);
         const src = URL.createObjectURL(blob);
         state.objectUrls.push(src);
-        const normalizedType = normalizeMimeType(type || blob.type) || "image/png";
         return {
             ...shared,
             src,
@@ -302,6 +401,13 @@
             isLabel: shared.isLabel ?? normalizedType.startsWith("image/"),
             blob
         };
+    }
+
+    function assertSupportedPreviewType(type, originalIndex) {
+        const normalizedType = normalizeMimeType(type);
+        if (normalizedType === "application/pdf" || normalizedType.startsWith("image/")) return;
+        const itemNumber = Number.isInteger(originalIndex) ? originalIndex + 1 : "unknown";
+        throw new Error(`Preview item ${itemNumber} has an unsupported media type.`);
     }
 
     function dataUrlToBlob(dataUrl, fallbackType = "application/octet-stream") {
@@ -324,7 +430,7 @@
         }
 
         const cleanBase64 = String(base64 || "")
-            .replace(/^data:[^;]+;base64,/i, "")
+            .replace(/^data:[^,]*;base64,/i, "")
             .replace(/\s/g, "");
         const binary = atob(cleanBase64);
         const chunkSize = 1024 * 512;
@@ -361,7 +467,7 @@
     }
 
     function inferTypeFromBase64(base64) {
-        const prefix = String(base64 || "").trim().replace(/^data:[^;]+;base64,/i, "").substring(0, 30);
+        const prefix = String(base64 || "").trim().replace(/^data:[^,]*;base64,/i, "").substring(0, 30);
         if (prefix.startsWith("JVBER")) return "application/pdf";
         if (prefix.startsWith("iVBORw0KGgo")) return "image/png";
         if (prefix.startsWith("/9j/")) return "image/jpeg";
@@ -375,7 +481,7 @@
             // Ignore header decode failures.
         }
 
-        return "image/png";
+        return "";
     }
 
     function isPdfItem(item) {
@@ -709,7 +815,11 @@
     function showError(message) {
         const status = document.getElementById("status");
         const subtitle = document.getElementById("viewer-subtitle");
+        const printBtn = document.getElementById("print-all-btn");
+        const downloadBtn = document.getElementById("download-btn");
         if (subtitle) subtitle.textContent = "Unable to load preview.";
+        if (printBtn) printBtn.hidden = true;
+        if (downloadBtn) downloadBtn.hidden = true;
         if (status) {
             status.className = "error-card";
             status.setAttribute("role", "alert");

@@ -166,6 +166,17 @@
             color: var(--qs-error);
         }
 
+        .warning-card {
+            margin: 0 0 18px 154px;
+            padding: 10px 14px;
+            border: 1px solid #e6c46a;
+            border-radius: 8px;
+            background: #fff8df;
+            color: #6b5315;
+            font-size: 12px;
+            font-weight: 650;
+        }
+
         .labels-container {
             display: flex;
             flex-direction: column;
@@ -381,6 +392,10 @@
                 row-gap: 12px;
             }
 
+            .warning-card {
+                margin-left: 0;
+            }
+
             .group-summary {
                 position: static;
                 justify-content: flex-start;
@@ -476,6 +491,7 @@
             .viewer-group.documents-group,
             .label-card.pdf-item,
             .status-card,
+            .warning-card,
             .error-card {
                 display: none !important;
             }

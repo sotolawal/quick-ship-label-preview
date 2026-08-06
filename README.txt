@@ -38,7 +38,7 @@ Key Features
                         1. Uses a floating button that can be moved and/or dismissed.  
 
 4. Clipboard Previews
-        Allows selected/copied label data to be previewed.
+        Opens selected/copied label data directly in the dedicated viewer tab.
                 Preview copied label data:
                         1. Highlight text that contains supported label data.
                         2. Right-click the highlighted text.

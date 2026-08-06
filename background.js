@@ -80,20 +80,13 @@ async function handleRuntimeMessage(msg, sender) {
         return { success: true };
     } else if (msg.type === "analyzeText") {
         requireExtensionSender(sender, "Clipboard previews");
-        // Handle clipboard content
-        let tabId = sender.tab ? sender.tab.id : null;
-        let url = sender.tab ? sender.tab.url : "Popup";
-
-        // If request came from Popup (no sender tab), try to target the active tab
-        if (!tabId) {
+        // Clipboard previews always open in the dedicated viewer. The active
+        // tab is consulted only for history context; no in-page UI is started.
+        let url = sender.tab ? sender.tab.url : "Clipboard";
+        if (!sender.tab) {
             const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
             if (tabs && tabs.length > 0) {
-                // Check if we can inject into this tab by trying to send the loading signal
-                const canInject = await sendToTabSafe(tabs[0].id, { type: "startLoading" });
-                if (canInject) {
-                    tabId = tabs[0].id;
-                    url = tabs[0].url;
-                }
+                url = tabs[0].url || url;
             }
         }
 
@@ -105,8 +98,12 @@ async function handleRuntimeMessage(msg, sender) {
             }
         } catch (e) { /* ignore */ }
 
-        await processLabelContent(text, tabId, "Clipboard", url);
-        return { success: true };
+        const result = await processLabelContent(text, null, "Clipboard", url);
+        if (result && result.success === false) return result;
+        return {
+            success: true,
+            previewId: result && result.previewId
+        };
     } else if (msg.type === "openViewer") {
         requireExtensionSender(sender, "Viewer requests");
         const previewId = await openViewerTab(msg.images || [], msg.metadata || {});
@@ -159,11 +156,21 @@ async function handleRuntimeMessage(msg, sender) {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === "qs-preview-label" && info.selectionText) {
-        // Handle context menu selection
-        const canRender = await sendToTabSafe(tab.id, { type: "startLoading" });
-        const targetTabId = canRender ? tab.id : null;
-
-        await processLabelContent(info.selectionText, targetTabId, "Selection", tab.url);
+        const result = await processLabelContent(
+            info.selectionText,
+            null,
+            "Selection",
+            tab && tab.url ? tab.url : "Selection"
+        );
+        if (result && result.success === false && tab && tab.id) {
+            try {
+                await chrome.tabs.sendMessage(tab.id, result);
+            } catch {
+                await openViewerErrorTab(result);
+            }
+        } else if (result && result.success === false) {
+            await openViewerErrorTab(result);
+        }
     }
 });
 
@@ -1301,8 +1308,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
         const extractedDocuments = Array.isArray(extracted.documents) && extracted.documents.length
             ? extracted.documents
             : rawList.map(data => ({ data, format }));
-        const previewCandidates = extractedDocuments
-            .map((document, originalIndex) => ({
+        const analyzedDocuments = extractedDocuments.map((document, originalIndex) => ({
                 ...document,
                 originalIndex,
                 detectedFormat: detectSupportedDocumentFormat(
@@ -1313,10 +1319,22 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                         || document.type
                         || document.format
                 )
-            }))
-            .filter(document => Boolean(document.detectedFormat));
+            }));
         const processedImages = [];
         const failedDocuments = [];
+        const previewCandidates = [];
+
+        for (const document of analyzedDocuments) {
+            if (document.detectedFormat) {
+                previewCandidates.push(document);
+                continue;
+            }
+            failedDocuments.push({
+                index: document.originalIndex + 1,
+                name: getDocumentDisplayName(document, document.originalIndex),
+                reason: "The document format is not supported by the viewer."
+            });
+        }
 
         if (previewCandidates.length === 0) {
             if (isManualPreviewSource(historyLabel)) {
@@ -1327,12 +1345,13 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
 
         for (const [dataIndex, document] of previewCandidates.entries()) {
             const base64 = document.data;
+            const originalDocumentNumber = document.originalIndex + 1;
             sendLabelProcessingProgress(
                 tabId,
                 `Processing document ${dataIndex + 1} of ${previewCandidates.length}...`,
                 "ZPL documents may pause briefly while the renderer observes its request limit."
             );
-            const documentName = getDocumentDisplayName(document, dataIndex);
+            const documentName = getDocumentDisplayName(document, document.originalIndex);
             const detectedFormat = document.detectedFormat;
 
             if (detectedFormat === "pdf") {
@@ -1370,13 +1389,13 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     zpl = atob(base64);
                 } catch (err) {
                     console.warn("Failed to decode base64 label data", err);
-                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The encoded label could not be decoded." });
+                    failedDocuments.push({ index: originalDocumentNumber, name: documentName, reason: "The encoded label could not be decoded." });
                     continue;
                 }
 
                 zpl = zpl.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\0/g, "").trim();
                 if (!zpl) {
-                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The decoded label was empty." });
+                    failedDocuments.push({ index: originalDocumentNumber, name: documentName, reason: "The decoded label was empty." });
                     continue;
                 }
 
@@ -1384,7 +1403,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 // Most ZPL labels start with ^XA, but allow for some flexibility
                 if (!zpl.includes("^XA") && !zpl.includes("^xa")) {
                     console.warn("Skipping Labelary request: Decoded data does not appear to be valid ZPL (missing ^XA command).", zpl.substring(0, 100));
-                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The decoded document was not recognized as PDF, image, or ZPL." });
+                    failedDocuments.push({ index: originalDocumentNumber, name: documentName, reason: "The decoded document was not recognized as PDF, image, or ZPL." });
                     continue;
                 }
 
@@ -1433,7 +1452,7 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                         "image/png"
                     ));
                 } else {
-                    failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The label renderer could not produce an image." });
+                    failedDocuments.push({ index: originalDocumentNumber, name: documentName, reason: "The label renderer could not produce an image." });
                 }
 
                 if (dataIndex < previewCandidates.length - 1) {
@@ -1482,11 +1501,18 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 failedDocuments
             };
 
-            if (baseUrl === "Popup") {
+            if (isManualPreviewSource(historyLabel)) {
+                payload.previewId = await openViewerTab(processedImages, {
+                    website,
+                    source: historyLabel.toLowerCase(),
+                    warningTitle: payload.warningTitle,
+                    warning: payload.warning,
+                    failedDocuments
+                });
+            } else if (baseUrl === "Popup") {
                 // If request came from Popup, always send back to runtime to resolve popup UI state
                 chrome.runtime.sendMessage(payload);
-            }
-            if (tabId) {
+            } else if (tabId) {
                 chrome.tabs.sendMessage(tabId, payload);
             } else if (baseUrl !== "Popup") {
                 await openViewerTab(processedImages, {
@@ -1495,6 +1521,8 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                     source: baseUrl
                 });
             }
+
+            return payload;
         }
     } catch (err) {
         // If signal exists and is aborted, suppress error
@@ -1510,12 +1538,15 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
             isNoData: Boolean(err.isNoData)
         };
 
-        if (baseUrl === "Popup") {
-            chrome.runtime.sendMessage(errorPayload);
+        if (!isManualPreviewSource(historyLabel)) {
+            if (baseUrl === "Popup") {
+                chrome.runtime.sendMessage(errorPayload);
+            }
+            if (tabId) {
+                chrome.tabs.sendMessage(tabId, errorPayload);
+            }
         }
-        if (tabId) {
-            chrome.tabs.sendMessage(tabId, errorPayload);
-        }
+        return errorPayload;
     }
 }
 
@@ -1561,6 +1592,16 @@ async function openViewerTab(images, metadata = {}) {
         throw err;
     }
     return previewId;
+}
+
+async function openViewerErrorTab(error = {}) {
+    const params = new URLSearchParams({
+        title: error.title || "Preview Error",
+        error: error.error || "The selected content could not be previewed."
+    });
+    await chrome.tabs.create({
+        url: chrome.runtime.getURL(`viewer.html?${params.toString()}`)
+    });
 }
 
 function createPreviewId() {

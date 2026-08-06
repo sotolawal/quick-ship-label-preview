@@ -45,9 +45,28 @@ document.addEventListener("DOMContentLoaded", async () => {
                 return;
             }
             pasteBtn.style.opacity = "0.5"; // Visual feedback
-            chrome.runtime.sendMessage({ type: "analyzeText", text: text });
+            pasteBtn.disabled = true;
+            chrome.runtime.sendMessage({ type: "analyzeText", text }, (result) => {
+                pasteBtn.style.opacity = "1";
+                pasteBtn.disabled = false;
+
+                if (chrome.runtime.lastError || !result || result.success === false) {
+                    const error = result && result.error;
+                    const title = result && (result.title || (result.isNoData ? "Nothing to Preview" : "Error"));
+                    showErrorModal(
+                        error || chrome.runtime.lastError?.message || "Failed to process the clipboard preview.",
+                        title || "Error",
+                        { category: result && result.category, hint: getPreviewErrorHint(result || {}) }
+                    );
+                    return;
+                }
+
+                loadHistory();
+            });
         } catch (err) {
             console.error("Clipboard read failed:", err);
+            pasteBtn.style.opacity = "1";
+            pasteBtn.disabled = false;
             showErrorModal(err.message || "Failed to read clipboard.");
         }
     });
@@ -468,29 +487,6 @@ Hint: ${details.hint}` : "";
         }
         return "Select the full label payload and try again.";
     }
-
-    chrome.runtime.onMessage.addListener((msg) => {
-        if (msg.type === "labelPreview") {
-            pasteBtn.style.opacity = "1";
-            if (msg.success) {
-                loadHistory(); // Refresh list
-                openInNewTab(msg.images, {
-                    source: "clipboard"
-                });
-                if (msg.warning) {
-                    showErrorModal(msg.warning, msg.warningTitle || "Preview Partially Completed");
-                }
-            } else {
-                console.error(msg.error);
-                const title = msg.title || (msg.isNoData ? "Nothing to Preview" : "Error");
-                showErrorModal(
-                    msg.error || "Failed to process label.",
-                    title,
-                    { category: msg.category, hint: getPreviewErrorHint(msg) }
-                );
-            }
-        }
-    });
 
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area === "local" && changes.labelHistory) {
