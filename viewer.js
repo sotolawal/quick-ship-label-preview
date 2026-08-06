@@ -91,7 +91,6 @@
 
     function renderMetadata(preview) {
         const subtitle = document.getElementById("viewer-subtitle");
-        const pill = document.getElementById("metadata-pill");
         const metadata = preview.metadata || {};
         const itemCount = Array.isArray(preview.images) ? preview.images.length : 0;
 
@@ -183,7 +182,6 @@
         heading.textContent = title;
 
         const count = document.createElement("span");
-        count.className = "group-count";
         count.textContent = String(items.length);
         count.setAttribute("aria-label", `${items.length} ${title.toLowerCase()}`);
 
@@ -436,7 +434,7 @@
             rotateBtn.title = "Rotate clockwise";
             rotateBtn.setAttribute("aria-label", `Rotate label ${renderedIndex + 1} clockwise`);
             rotateBtn.setAttribute("aria-controls", mediaId);
-            rotateBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11a8.1 8.1 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg>';
+            rotateBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 512 512" fill="none" stroke="currentColor" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M320 146c-19-8-41-12-64-12a160 160 0 1 0 160 160"/><polyline points="256 58 336 138 256 218"/></svg>';
             rotateBtn.addEventListener("click", () => rotate(mediaId, `fan-${item.originalIndex}`));
 
             actions.append(fan, rotateBtn);

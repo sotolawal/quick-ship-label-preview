@@ -89,20 +89,6 @@
             white-space: nowrap;
         }
 
-        .metadata-pill {
-            display: inline-flex;
-            flex: 0 0 auto;
-            align-items: center;
-            min-height: 22px;
-            padding: 3px 8px;
-            border: 1px solid #c8e1ef;
-            border-radius: 999px;
-            background: var(--qs-blue-soft);
-            color: var(--qs-blue);
-            font-size: 11px;
-            font-weight: 700;
-        }
-
         .viewer-actions {
             display: flex;
             flex: 0 0 auto;
@@ -212,21 +198,6 @@
             letter-spacing: 0.12em;
             line-height: 1;
             text-transform: uppercase;
-        }
-
-        .group-count {
-            display: inline-grid;
-            min-width: 25px;
-            height: 25px;
-            place-items: center;
-            padding: 0 7px;
-            border: 1px solid var(--qs-border-strong);
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.7);
-            color: var(--qs-muted);
-            font-size: 11px;
-            font-variant-numeric: tabular-nums;
-            font-weight: 750;
         }
 
         .viewer-group-items {
@@ -346,10 +317,7 @@
             height: 40px;
             place-items: center;
             padding: 0;
-            border: 1px solid rgba(181, 198, 209, 0.92);
-            border-radius: 999px;
             background: rgba(255, 255, 255, 0.92);
-            box-shadow: 0 3px 10px rgba(31, 41, 51, 0.14);
             color: var(--qs-blue);
             cursor: pointer;
             backdrop-filter: blur(8px);
@@ -568,7 +536,6 @@
             <div class="viewer-title-group">
                 <h1 class="viewer-title">Document Preview</h1>
                 <p id="viewer-subtitle" class="viewer-subtitle">Preparing documents…</p>
-                <div id="metadata-pill" class="metadata-pill" hidden></div>
             </div>
             <div class="viewer-actions">
                 <button id="download-btn" class="btn" type="button" hidden>
