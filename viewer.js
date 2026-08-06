@@ -103,13 +103,7 @@
                 ? parts.join(" • ")
                 : `${itemCount} item${itemCount === 1 ? "" : "s"} ready`;
         }
-
-        if (pill) {
-            pill.hidden = false;
-            pill.textContent = String(itemCount);
-            pill.setAttribute("aria-label", `${itemCount} item${itemCount === 1 ? "" : "s"}`);
-        }
-
+        
         document.title = itemCount > 1
             ? `Document Preview (${itemCount} items)`
             : "Document Preview";
