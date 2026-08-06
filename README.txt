@@ -4,6 +4,9 @@ Pre-release version 2.5
 What's New/Changed
 - Added throttling to comply with Labelary rate limits when previewing several labels/documents at once. 
 - Labels can now be printed with the appropriate dimensions when printing from the viewer. 
+- The viewer now groups labels and PDF documents in a compact indexed layout.
+- Added direct download for a single item and ZIP download for multi-item previews, using Pack ID-based filenames.
+- Viewer previews can be refreshed during their one-hour retention window.
 
 What This Does
 This extension helps preview shipping related documents and labels from Quick Ship. It can preview as shipments are processed, preview copied label or document data and store recent previews.

@@ -1156,6 +1156,97 @@ function normalizeDeclaredDocumentFormat(value) {
     return null;
 }
 
+function firstPreviewMetadataValue(...values) {
+    for (const value of values) {
+        if (value === undefined || value === null) continue;
+        if (typeof value === "string" && !value.trim()) continue;
+        return value;
+    }
+    return null;
+}
+
+function getCanonicalPayloadFormat(detectedFormat) {
+    switch (String(detectedFormat || "").toLowerCase()) {
+        case "pdf": return "PDF";
+        case "zpl": return "ZPL";
+        case "png": return "PNG";
+        case "jpeg": return "JPEG";
+        case "gif": return "GIF";
+        default: return null;
+    }
+}
+
+function getCanonicalDocumentMimeType(detectedFormat) {
+    switch (String(detectedFormat || "").toLowerCase()) {
+        case "pdf": return "application/pdf";
+        case "png": return "image/png";
+        case "jpeg": return "image/jpeg";
+        case "gif": return "image/gif";
+        default: return "application/octet-stream";
+    }
+}
+
+function isMimeDocumentType(value) {
+    return typeof value === "string"
+        && /^[a-z][a-z0-9.+-]*\/[a-z0-9.+-]+$/i.test(value.trim());
+}
+
+function getProcessedDocumentMetadata(document, detectedFormat) {
+    const fallbackFormat = getCanonicalPayloadFormat(detectedFormat);
+    const payloadFormat = firstPreviewMetadataValue(
+        document && document.payloadFormat,
+        document && document.originalFormat,
+        document && document.docType,
+        fallbackFormat
+    );
+    const originalFormat = firstPreviewMetadataValue(
+        document && document.originalFormat,
+        document && document.payloadFormat,
+        document && document.docType,
+        fallbackFormat
+    );
+    const contentType = firstPreviewMetadataValue(document && document.contentType);
+    const documentType = firstPreviewMetadataValue(
+        document && document.documentType,
+        isMimeDocumentType(contentType) ? null : contentType
+    );
+    const filename = firstPreviewMetadataValue(
+        document && document.filename,
+        document && document.fileName,
+        document && document.carrierFilename,
+        document && document.carrierFileName
+    );
+    const carrierFilename = firstPreviewMetadataValue(
+        document && document.carrierFilename,
+        document && document.carrierFileName,
+        filename
+    );
+    const values = {
+        documentType,
+        payloadFormat,
+        originalFormat,
+        trackingNumber: firstPreviewMetadataValue(document && document.trackingNumber),
+        contentKey: firstPreviewMetadataValue(document && document.contentKey),
+        carrier: firstPreviewMetadataValue(document && document.carrier),
+        filename,
+        carrierFilename,
+        copiesToPrint: firstPreviewMetadataValue(document && document.copiesToPrint),
+        sourceKey: firstPreviewMetadataValue(document && document.sourceKey)
+    };
+
+    return Object.fromEntries(
+        Object.entries(values).filter(([, value]) => value !== null)
+    );
+}
+
+function createProcessedPreviewItem(document, detectedFormat, src, type) {
+    return {
+        src,
+        type,
+        ...getProcessedDocumentMetadata(document, detectedFormat)
+    };
+}
+
 function detectSupportedDocumentFormat(base64, declaredFormat = null) {
     const clean = String(base64 || "").trim().replace(/^data:[^;]+;base64,/i, "").replace(/\s/g, "");
     if (!clean) return null;
@@ -1174,7 +1265,7 @@ function detectSupportedDocumentFormat(base64, declaredFormat = null) {
 }
 
 function getDocumentDisplayName(document, index) {
-    const raw = String(document && (document.contentType || document.type) || "").trim();
+    const raw = String(document && (document.documentType || document.contentType || document.type) || "").trim();
     if (!raw || raw.toUpperCase() === "LABEL") return `Document ${index + 1}`;
     return raw.toLowerCase().split("_").map(word => word ? word[0].toUpperCase() + word.slice(1) : "").join(" ");
 }
@@ -1216,7 +1307,11 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 originalIndex,
                 detectedFormat: detectSupportedDocumentFormat(
                     document.data,
-                    document.docType || document.type || document.format
+                    document.payloadFormat
+                        || document.originalFormat
+                        || document.docType
+                        || document.type
+                        || document.format
                 )
             }))
             .filter(document => Boolean(document.detectedFormat));
@@ -1241,25 +1336,33 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
             const detectedFormat = document.detectedFormat;
 
             if (detectedFormat === "pdf") {
-                processedImages.push({
-                    src: `data:application/pdf;base64,${base64}`,
-                    type: "application/pdf"
-                });
+                processedImages.push(createProcessedPreviewItem(
+                    document,
+                    detectedFormat,
+                    `data:application/pdf;base64,${base64}`,
+                    "application/pdf"
+                ));
             } else if (detectedFormat === "png") {
-                processedImages.push({
-                    src: `data:image/png;base64,${base64}`,
-                    type: "image/png"
-                });
+                processedImages.push(createProcessedPreviewItem(
+                    document,
+                    detectedFormat,
+                    `data:image/png;base64,${base64}`,
+                    "image/png"
+                ));
             } else if (detectedFormat === "jpeg") {
-                processedImages.push({
-                    src: `data:image/jpeg;base64,${base64}`,
-                    type: "image/jpeg"
-                });
+                processedImages.push(createProcessedPreviewItem(
+                    document,
+                    detectedFormat,
+                    `data:image/jpeg;base64,${base64}`,
+                    "image/jpeg"
+                ));
             } else if (detectedFormat === "gif") {
-                processedImages.push({
-                    src: `data:image/gif;base64,${base64}`,
-                    type: "image/gif"
-                });
+                processedImages.push(createProcessedPreviewItem(
+                    document,
+                    detectedFormat,
+                    `data:image/gif;base64,${base64}`,
+                    "image/gif"
+                ));
             } else {
                 // Assume ZPL
                 let zpl = "";
@@ -1323,10 +1426,12 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
                 if (labelaryResp) {
                     const pngBlob = await labelaryResp.blob();
                     const b64png = await blobToBase64(pngBlob);
-                    processedImages.push({
-                        src: b64png,
-                        type: "image/png"
-                    });
+                    processedImages.push(createProcessedPreviewItem(
+                        document,
+                        detectedFormat,
+                        b64png,
+                        "image/png"
+                    ));
                 } else {
                     failedDocuments.push({ index: dataIndex + 1, name: documentName, reason: "The label renderer could not produce an image." });
                 }
@@ -1359,7 +1464,9 @@ async function processLabelContent(fileContent, tabId, historyLabel, baseUrl, si
             packID: historyLabel,
             website: website,
             timestamp: Date.now(),
-            images: processedImages.map(img => img.src) // Store all images
+            // Keep the document metadata so history previews and downloads use
+            // the same carrier-neutral names as a newly generated preview.
+            images: processedImages.map(item => ({ ...item }))
         });
 
         if (!signal || !signal.aborted) {
@@ -1435,7 +1542,8 @@ async function openViewerTab(images, metadata = {}) {
         });
     } catch (sessionError) {
         // storage.session has a fixed 10 MB total quota. storage.local is
-        // unlimited for this extension and the viewer removes the item on read.
+        // unlimited for this extension. Viewer previews remain available for
+        // refresh until the one-hour cleanup window expires.
         console.warn("[Quick Ship] Session preview storage unavailable; using local storage:", sessionError);
         await chrome.storage.local.set({
             [storageKey]: previewPayload
@@ -1488,11 +1596,15 @@ async function cleanupOldViewerPreviewsInArea(storageArea, maxAgeMs) {
     for (const [key, value] of Object.entries(allItems)) {
         if (!key.startsWith("preview:")) continue;
 
+        const lastAccessedAt = value && typeof value.lastAccessedAt === "number"
+            ? value.lastAccessedAt
+            : 0;
         const createdAt = value && typeof value.createdAt === "number"
             ? value.createdAt
             : 0;
+        const retentionTimestamp = lastAccessedAt || createdAt;
 
-        if (!createdAt || now - createdAt > maxAgeMs) {
+        if (!retentionTimestamp || now - retentionTimestamp > maxAgeMs) {
             keysToRemove.push(key);
         }
     }
@@ -1612,13 +1724,25 @@ async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, auth
             throw error;
         }
 
+        const p21ContentType = resolved.contentType || "application/pdf";
+        const p21DetectedFormat = detectSupportedDocumentFormat(
+            resolved.documentData,
+            p21ContentType
+        ) || "pdf";
+        const p21PayloadFormat = getCanonicalPayloadFormat(p21DetectedFormat) || "PDF";
+        const p21PreviewDocument = {
+            base64: resolved.documentData,
+            type: getCanonicalDocumentMimeType(p21DetectedFormat),
+            documentType: "PACKING_LIST",
+            payloadFormat: p21PayloadFormat,
+            originalFormat: p21PayloadFormat
+        };
+
         await saveToHistory({
             packID: `P21 Packing List ${shipmentLookupNumber}`,
             website: configuredBase || cleanBase,
             timestamp: Date.now(),
-            images: [
-                `data:${resolved.contentType || "application/pdf"};base64,${resolved.documentData}`
-            ],
+            images: [{ ...p21PreviewDocument }],
             metadata: {
                 source: "P21 Packing List",
                 erpNumber: resolvedErpNumber,
@@ -1628,12 +1752,7 @@ async function handleP21PackingListPreview({ shipmentLookupNumber, baseUrl, auth
             }
         });
 
-        await openViewerTab([
-            {
-                base64: resolved.documentData,
-                type: resolved.contentType || "application/pdf"
-            }
-        ], {
+        await openViewerTab([{ ...p21PreviewDocument }], {
             source: "P21 Packing List",
             erpNumber: resolvedErpNumber,
             shipmentLookupNumber,
@@ -2056,7 +2175,11 @@ async function sendToTabSafe(tabId, message) {
 
 function getHistoryContentFingerprint(item) {
     const images = Array.isArray(item && item.images) ? item.images : [];
-    const seed = images.map(value => String(value || "")).join("|");
+    const seed = images.map(value => {
+        if (typeof value === "string") return value;
+        if (!value || typeof value !== "object") return String(value || "");
+        return String(value.src || value.base64 || "");
+    }).join("|");
     let hash = 2166136261;
     for (let i = 0; i < seed.length; i++) {
         hash ^= seed.charCodeAt(i);

@@ -384,8 +384,12 @@ Hint: ${details.hint}` : "";
             // Open Image
             el.addEventListener("click", (e) => {
                 if (e.target.closest(".delete-btn")) return;
+                const historyMetadata = item.metadata && typeof item.metadata === "object"
+                    ? item.metadata
+                    : {};
                 openInNewTab(item.images || (item.png ? [item.png] : []), {
-                    source: "history",
+                    ...historyMetadata,
+                    source: historyMetadata.source || "history",
                     packID: item.packID,
                     website: item.website,
                     timestamp: item.timestamp

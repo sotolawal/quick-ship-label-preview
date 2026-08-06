@@ -16,6 +16,66 @@ function normalizeBase64Candidate(value) {
         .replace(/\s/g, "");
 }
 
+function firstDocumentMetadataValue(...values) {
+    for (const value of values) {
+        if (value === undefined || value === null) continue;
+        if (typeof value === "string" && !value.trim()) continue;
+        return value;
+    }
+    return null;
+}
+
+function logicalDocumentType(value) {
+    const normalized = firstDocumentMetadataValue(value);
+    if (typeof normalized === "string" && /^[a-z][a-z0-9.+-]*\/[a-z0-9.+-]+$/i.test(normalized.trim())) {
+        return null;
+    }
+    return normalized;
+}
+
+function getCaseInsensitiveMetadataValue(node, names) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return null;
+    const wanted = new Set(names.map(name => String(name).toLowerCase()));
+    for (const [key, value] of Object.entries(node)) {
+        if (!wanted.has(key.toLowerCase())) continue;
+        if (value === undefined || value === null) continue;
+        if (typeof value === "string" && !value.trim()) continue;
+        if (typeof value === "object") continue;
+        return value;
+    }
+    return null;
+}
+
+function getCandidateMetadata(node, sourceKey, fallbackCarrier = null) {
+    const payloadFormat = getCaseInsensitiveMetadataValue(node, [
+        "payloadFormat",
+        "originalFormat",
+        "docType"
+    ]);
+    const filename = getCaseInsensitiveMetadataValue(node, [
+        "filename",
+        "fileName",
+        "carrierFilename",
+        "carrierFileName"
+    ]);
+
+    return {
+        documentType: getCaseInsensitiveMetadataValue(node, ["documentType"]),
+        payloadFormat,
+        originalFormat: getCaseInsensitiveMetadataValue(node, ["originalFormat"]) || payloadFormat,
+        trackingNumber: getCaseInsensitiveMetadataValue(node, ["trackingNumber"]),
+        contentKey: getCaseInsensitiveMetadataValue(node, ["contentKey"]),
+        carrier: getCaseInsensitiveMetadataValue(node, ["carrier"]) || fallbackCarrier,
+        filename,
+        carrierFilename: getCaseInsensitiveMetadataValue(node, ["carrierFilename", "carrierFileName"]) || filename,
+        copiesToPrint: getCaseInsensitiveMetadataValue(node, ["copiesToPrint"]),
+        contentType: getCaseInsensitiveMetadataValue(node, ["contentType"]),
+        docType: getCaseInsensitiveMetadataValue(node, ["docType"]),
+        type: getCaseInsensitiveMetadataValue(node, ["type"]),
+        sourceKey
+    };
+}
+
 function extractLabelData(content) {
     const results = [];
     const documents = [];
@@ -42,6 +102,27 @@ function extractLabelData(content) {
         if (typeof value !== "string") return;
         const clean = normalizeBase64Candidate(value);
         if (!isValidBase64(clean)) return;
+        const documentType = firstDocumentMetadataValue(
+            metadata.documentType,
+            logicalDocumentType(metadata.contentType)
+        );
+        const payloadFormat = firstDocumentMetadataValue(
+            metadata.payloadFormat,
+            metadata.originalFormat,
+            metadata.docType
+        );
+        const originalFormat = firstDocumentMetadataValue(metadata.originalFormat, payloadFormat);
+        const filename = firstDocumentMetadataValue(
+            metadata.filename,
+            metadata.fileName,
+            metadata.carrierFilename,
+            metadata.carrierFileName
+        );
+        const carrierFilename = firstDocumentMetadataValue(
+            metadata.carrierFilename,
+            metadata.carrierFileName,
+            filename
+        );
         results.push(clean);
         documents.push({
             data: clean,
@@ -49,7 +130,15 @@ function extractLabelData(content) {
             contentType: metadata.contentType || null,
             docType: metadata.docType || null,
             type: metadata.type || null,
-            copiesToPrint: metadata.copiesToPrint,
+            documentType,
+            payloadFormat,
+            originalFormat,
+            trackingNumber: firstDocumentMetadataValue(metadata.trackingNumber),
+            contentKey: firstDocumentMetadataValue(metadata.contentKey),
+            carrier: firstDocumentMetadataValue(metadata.carrier),
+            filename,
+            carrierFilename,
+            copiesToPrint: metadata.copiesToPrint ?? null,
             sourceKey: metadata.sourceKey || null
         });
         if (!detectedFormat) detectedFormat = format;
@@ -64,8 +153,16 @@ function extractLabelData(content) {
                 if (Object.prototype.hasOwnProperty.call(node, "encodedLabel")) {
                     addCandidate(node.encodedLabel, node.docType || node.type || "FedEx", {
                         contentType: node.contentType,
+                        documentType: node.contentType,
                         docType: node.docType,
+                        payloadFormat: node.docType || node.type,
+                        originalFormat: node.docType || node.type,
                         type: node.type,
+                        trackingNumber: node.trackingNumber,
+                        contentKey: node.contentKey,
+                        carrier: "FedEx",
+                        filename: node.filename || node.fileName,
+                        carrierFilename: node.carrierFilename || node.carrierFileName || node.filename || node.fileName,
                         copiesToPrint: node.copiesToPrint,
                         sourceKey: "encodedLabel"
                     });
@@ -73,9 +170,10 @@ function extractLabelData(content) {
                 for (const { key, format } of jsonStrategies) {
                     if (Object.prototype.hasOwnProperty.call(node, key)) {
                         const val = node[key];
-                        addCandidate(val, format);
+                        const metadata = getCandidateMetadata(node, key, format);
+                        addCandidate(val, format, metadata);
                         if (Array.isArray(val)) {
-                            for (const item of val) addCandidate(item, format);
+                            for (const item of val) addCandidate(item, format, metadata);
                         }
                     }
                 }
@@ -97,7 +195,7 @@ function extractLabelData(content) {
         const jsonStringPattern = new RegExp(`"${escapedKey}"\\s*:\\s*"([A-Za-z0-9+/=\\r\\n\\t ]{20,})"`, "gi");
         let jsonMatch;
         while ((jsonMatch = jsonStringPattern.exec(content || "")) !== null) {
-            addCandidate(jsonMatch[1], format);
+            addCandidate(jsonMatch[1], format, { carrier: format, sourceKey: key });
         }
     }
 
@@ -128,7 +226,7 @@ function extractLabelData(content) {
                     const nodes = doc.querySelectorAll(selector);
                     for (const node of nodes) {
                         if (node.children.length === 0) {
-                            addCandidate(node.textContent, format);
+                            addCandidate(node.textContent, format, { carrier: format, sourceKey: selector });
                         }
                     }
                 }
@@ -166,7 +264,7 @@ function extractLabelData(content) {
                 if (data.startsWith("<![CDATA[") && data.endsWith("]]>") ) {
                     data = data.substring(9, data.length - 3).trim();
                 }
-                addCandidate(data, format);
+                addCandidate(data, format, { carrier: format });
             }
         }
     }
