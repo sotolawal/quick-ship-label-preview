@@ -155,11 +155,6 @@
         }
 
         if (normalizedItems.length === 0) {
-            const pill = document.getElementById("metadata-pill");
-            if (pill) {
-                pill.textContent = `0 / ${images.length}`;
-                pill.setAttribute("aria-label", `0 of ${images.length} items available`);
-            }
             document.title = "Document Preview (0 items)";
             const firstReason = normalizationFailures[0]?.reason;
             const reasonMessage = firstReason && firstReason.message
@@ -176,11 +171,6 @@
         viewer.replaceChildren();
 
         if (normalizationFailures.length > 0) {
-            const pill = document.getElementById("metadata-pill");
-            if (pill) {
-                pill.textContent = `${orderedItems.length} / ${images.length}`;
-                pill.setAttribute("aria-label", `${orderedItems.length} of ${images.length} items available`);
-            }
             document.title = orderedItems.length > 1
                 ? `Document Preview (${orderedItems.length} items)`
                 : "Document Preview";

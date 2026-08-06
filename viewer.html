@@ -8,6 +8,7 @@
     <style>
         :root {
             color-scheme: light;
+            --qs-blue-light: #2d82b6;
             --qs-blue: #0d6da0;
             --qs-blue-hover: #095c8a;
             --qs-blue-soft: #e8f4fb;
@@ -136,13 +137,14 @@
 
         .btn.secondary {
             border-color: #b8cfdd;
+            border: 2px solid;
             background: #fff;
             color: var(--qs-blue);
         }
 
         .btn.secondary:hover {
-            border-color: #9fc2d5;
-            background: #f3f9fc;
+            color: var(--qs-blue-light);
+            box-shadow: 0 3px 6px hsla(200,45%,25%,0.15);
         }
 
         .btn:disabled {
@@ -560,7 +562,7 @@
                     </svg>
                     <span id="download-btn-label">Download</span>
                 </button>
-                <button id="print-all-btn" class="btn secondary" type="button">Print</button>
+                <button id="print-all-btn" class="btn" type="button">Print</button>
                 <button id="close-btn" class="btn secondary" type="button">Close</button>
             </div>
         </header>
