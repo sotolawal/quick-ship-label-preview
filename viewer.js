@@ -539,7 +539,7 @@
 
         captureMediaSize(el);
         let current = parseInt(el.getAttribute("data-rotation") || "0", 10);
-        current = (current + 90) % 360;
+        current += 90;
         el.style.transform = `rotate(${current}deg)`;
         el.setAttribute("data-rotation", String(current));
         resizeMediaContainer(el);
